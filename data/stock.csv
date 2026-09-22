@@ -1,0 +1,301 @@
+date,hour,category,size,units_remaining
+2026-09-22,10,Jeans,XS,13
+2026-09-22,10,Jeans,S,19
+2026-09-22,10,Jeans,M,24
+2026-09-22,10,Jeans,L,22
+2026-09-22,10,Jeans,XL,15
+2026-09-22,10,Jeans,XXL,10
+2026-09-22,11,Jeans,XS,13
+2026-09-22,11,Jeans,S,19
+2026-09-22,11,Jeans,M,21
+2026-09-22,11,Jeans,L,21
+2026-09-22,11,Jeans,XL,15
+2026-09-22,11,Jeans,XXL,9
+2026-09-22,12,Jeans,XS,13
+2026-09-22,12,Jeans,S,18
+2026-09-22,12,Jeans,M,20
+2026-09-22,12,Jeans,L,18
+2026-09-22,12,Jeans,XL,15
+2026-09-22,12,Jeans,XXL,9
+2026-09-22,13,Jeans,XS,13
+2026-09-22,13,Jeans,S,18
+2026-09-22,13,Jeans,M,16
+2026-09-22,13,Jeans,L,16
+2026-09-22,13,Jeans,XL,14
+2026-09-22,13,Jeans,XXL,8
+2026-09-22,14,Jeans,XS,13
+2026-09-22,14,Jeans,S,17
+2026-09-22,14,Jeans,M,14
+2026-09-22,14,Jeans,L,14
+2026-09-22,14,Jeans,XL,11
+2026-09-22,14,Jeans,XXL,8
+2026-09-22,15,Jeans,XS,13
+2026-09-22,15,Jeans,S,17
+2026-09-22,15,Jeans,M,11
+2026-09-22,15,Jeans,L,12
+2026-09-22,15,Jeans,XL,10
+2026-09-22,15,Jeans,XXL,8
+2026-09-22,16,Jeans,XS,13
+2026-09-22,16,Jeans,S,15
+2026-09-22,16,Jeans,M,10
+2026-09-22,16,Jeans,L,12
+2026-09-22,16,Jeans,XL,10
+2026-09-22,16,Jeans,XXL,8
+2026-09-22,17,Jeans,XS,13
+2026-09-22,17,Jeans,S,14
+2026-09-22,17,Jeans,M,9
+2026-09-22,17,Jeans,L,11
+2026-09-22,17,Jeans,XL,9
+2026-09-22,17,Jeans,XXL,7
+2026-09-22,18,Jeans,XS,13
+2026-09-22,18,Jeans,S,13
+2026-09-22,18,Jeans,M,9
+2026-09-22,18,Jeans,L,10
+2026-09-22,18,Jeans,XL,8
+2026-09-22,18,Jeans,XXL,6
+2026-09-22,19,Jeans,XS,13
+2026-09-22,19,Jeans,S,11
+2026-09-22,19,Jeans,M,6
+2026-09-22,19,Jeans,L,6
+2026-09-22,19,Jeans,XL,8
+2026-09-22,19,Jeans,XXL,6
+2026-09-22,10,Chinos,XS,14
+2026-09-22,10,Chinos,S,15
+2026-09-22,10,Chinos,M,5
+2026-09-22,10,Chinos,L,5
+2026-09-22,10,Chinos,XL,19
+2026-09-22,10,Chinos,XXL,10
+2026-09-22,11,Chinos,XS,14
+2026-09-22,11,Chinos,S,15
+2026-09-22,11,Chinos,M,2
+2026-09-22,11,Chinos,L,5
+2026-09-22,11,Chinos,XL,19
+2026-09-22,11,Chinos,XXL,10
+2026-09-22,12,Chinos,XS,13
+2026-09-22,12,Chinos,S,15
+2026-09-22,12,Chinos,M,2
+2026-09-22,12,Chinos,L,4
+2026-09-22,12,Chinos,XL,16
+2026-09-22,12,Chinos,XXL,10
+2026-09-22,13,Chinos,XS,13
+2026-09-22,13,Chinos,S,15
+2026-09-22,13,Chinos,M,0
+2026-09-22,13,Chinos,L,1
+2026-09-22,13,Chinos,XL,16
+2026-09-22,13,Chinos,XXL,10
+2026-09-22,14,Chinos,XS,12
+2026-09-22,14,Chinos,S,15
+2026-09-22,14,Chinos,M,0
+2026-09-22,14,Chinos,L,0
+2026-09-22,14,Chinos,XL,15
+2026-09-22,14,Chinos,XXL,10
+2026-09-22,15,Chinos,XS,12
+2026-09-22,15,Chinos,S,15
+2026-09-22,15,Chinos,M,0
+2026-09-22,15,Chinos,L,0
+2026-09-22,15,Chinos,XL,15
+2026-09-22,15,Chinos,XXL,9
+2026-09-22,16,Chinos,XS,12
+2026-09-22,16,Chinos,S,14
+2026-09-22,16,Chinos,M,0
+2026-09-22,16,Chinos,L,0
+2026-09-22,16,Chinos,XL,15
+2026-09-22,16,Chinos,XXL,9
+2026-09-22,17,Chinos,XS,10
+2026-09-22,17,Chinos,S,13
+2026-09-22,17,Chinos,M,0
+2026-09-22,17,Chinos,L,0
+2026-09-22,17,Chinos,XL,14
+2026-09-22,17,Chinos,XXL,9
+2026-09-22,18,Chinos,XS,10
+2026-09-22,18,Chinos,S,11
+2026-09-22,18,Chinos,M,0
+2026-09-22,18,Chinos,L,0
+2026-09-22,18,Chinos,XL,14
+2026-09-22,18,Chinos,XXL,9
+2026-09-22,19,Chinos,XS,10
+2026-09-22,19,Chinos,S,11
+2026-09-22,19,Chinos,M,0
+2026-09-22,19,Chinos,L,0
+2026-09-22,19,Chinos,XL,13
+2026-09-22,19,Chinos,XXL,9
+2026-09-22,10,Formal Wear,XS,10
+2026-09-22,10,Formal Wear,S,12
+2026-09-22,10,Formal Wear,M,16
+2026-09-22,10,Formal Wear,L,15
+2026-09-22,10,Formal Wear,XL,10
+2026-09-22,10,Formal Wear,XXL,8
+2026-09-22,11,Formal Wear,XS,10
+2026-09-22,11,Formal Wear,S,12
+2026-09-22,11,Formal Wear,M,16
+2026-09-22,11,Formal Wear,L,14
+2026-09-22,11,Formal Wear,XL,10
+2026-09-22,11,Formal Wear,XXL,8
+2026-09-22,12,Formal Wear,XS,10
+2026-09-22,12,Formal Wear,S,12
+2026-09-22,12,Formal Wear,M,15
+2026-09-22,12,Formal Wear,L,14
+2026-09-22,12,Formal Wear,XL,10
+2026-09-22,12,Formal Wear,XXL,8
+2026-09-22,13,Formal Wear,XS,10
+2026-09-22,13,Formal Wear,S,11
+2026-09-22,13,Formal Wear,M,11
+2026-09-22,13,Formal Wear,L,13
+2026-09-22,13,Formal Wear,XL,9
+2026-09-22,13,Formal Wear,XXL,8
+2026-09-22,14,Formal Wear,XS,10
+2026-09-22,14,Formal Wear,S,11
+2026-09-22,14,Formal Wear,M,10
+2026-09-22,14,Formal Wear,L,12
+2026-09-22,14,Formal Wear,XL,9
+2026-09-22,14,Formal Wear,XXL,8
+2026-09-22,15,Formal Wear,XS,10
+2026-09-22,15,Formal Wear,S,11
+2026-09-22,15,Formal Wear,M,8
+2026-09-22,15,Formal Wear,L,10
+2026-09-22,15,Formal Wear,XL,9
+2026-09-22,15,Formal Wear,XXL,8
+2026-09-22,16,Formal Wear,XS,10
+2026-09-22,16,Formal Wear,S,11
+2026-09-22,16,Formal Wear,M,8
+2026-09-22,16,Formal Wear,L,10
+2026-09-22,16,Formal Wear,XL,9
+2026-09-22,16,Formal Wear,XXL,8
+2026-09-22,17,Formal Wear,XS,9
+2026-09-22,17,Formal Wear,S,10
+2026-09-22,17,Formal Wear,M,8
+2026-09-22,17,Formal Wear,L,10
+2026-09-22,17,Formal Wear,XL,9
+2026-09-22,17,Formal Wear,XXL,7
+2026-09-22,18,Formal Wear,XS,9
+2026-09-22,18,Formal Wear,S,9
+2026-09-22,18,Formal Wear,M,6
+2026-09-22,18,Formal Wear,L,9
+2026-09-22,18,Formal Wear,XL,9
+2026-09-22,18,Formal Wear,XXL,7
+2026-09-22,19,Formal Wear,XS,9
+2026-09-22,19,Formal Wear,S,9
+2026-09-22,19,Formal Wear,M,5
+2026-09-22,19,Formal Wear,L,9
+2026-09-22,19,Formal Wear,XL,9
+2026-09-22,19,Formal Wear,XXL,7
+2026-09-22,10,Womenswear,XS,3
+2026-09-22,10,Womenswear,S,1
+2026-09-22,10,Womenswear,M,2
+2026-09-22,10,Womenswear,L,6
+2026-09-22,10,Womenswear,XL,1
+2026-09-22,10,Womenswear,XXL,2
+2026-09-22,11,Womenswear,XS,2
+2026-09-22,11,Womenswear,S,0
+2026-09-22,11,Womenswear,M,2
+2026-09-22,11,Womenswear,L,3
+2026-09-22,11,Womenswear,XL,0
+2026-09-22,11,Womenswear,XXL,1
+2026-09-22,12,Womenswear,XS,0
+2026-09-22,12,Womenswear,S,0
+2026-09-22,12,Womenswear,M,0
+2026-09-22,12,Womenswear,L,0
+2026-09-22,12,Womenswear,XL,0
+2026-09-22,12,Womenswear,XXL,0
+2026-09-22,13,Womenswear,XS,0
+2026-09-22,13,Womenswear,S,0
+2026-09-22,13,Womenswear,M,0
+2026-09-22,13,Womenswear,L,0
+2026-09-22,13,Womenswear,XL,0
+2026-09-22,13,Womenswear,XXL,0
+2026-09-22,14,Womenswear,XS,0
+2026-09-22,14,Womenswear,S,0
+2026-09-22,14,Womenswear,M,0
+2026-09-22,14,Womenswear,L,0
+2026-09-22,14,Womenswear,XL,0
+2026-09-22,14,Womenswear,XXL,0
+2026-09-22,15,Womenswear,XS,0
+2026-09-22,15,Womenswear,S,0
+2026-09-22,15,Womenswear,M,0
+2026-09-22,15,Womenswear,L,0
+2026-09-22,15,Womenswear,XL,0
+2026-09-22,15,Womenswear,XXL,0
+2026-09-22,16,Womenswear,XS,0
+2026-09-22,16,Womenswear,S,0
+2026-09-22,16,Womenswear,M,0
+2026-09-22,16,Womenswear,L,0
+2026-09-22,16,Womenswear,XL,0
+2026-09-22,16,Womenswear,XXL,0
+2026-09-22,17,Womenswear,XS,0
+2026-09-22,17,Womenswear,S,0
+2026-09-22,17,Womenswear,M,0
+2026-09-22,17,Womenswear,L,0
+2026-09-22,17,Womenswear,XL,0
+2026-09-22,17,Womenswear,XXL,0
+2026-09-22,18,Womenswear,XS,0
+2026-09-22,18,Womenswear,S,0
+2026-09-22,18,Womenswear,M,0
+2026-09-22,18,Womenswear,L,0
+2026-09-22,18,Womenswear,XL,0
+2026-09-22,18,Womenswear,XXL,0
+2026-09-22,19,Womenswear,XS,0
+2026-09-22,19,Womenswear,S,0
+2026-09-22,19,Womenswear,M,0
+2026-09-22,19,Womenswear,L,0
+2026-09-22,19,Womenswear,XL,0
+2026-09-22,19,Womenswear,XXL,0
+2026-09-22,10,Kidswear,XS,15
+2026-09-22,10,Kidswear,S,20
+2026-09-22,10,Kidswear,M,25
+2026-09-22,10,Kidswear,L,22
+2026-09-22,10,Kidswear,XL,15
+2026-09-22,10,Kidswear,XXL,10
+2026-09-22,11,Kidswear,XS,15
+2026-09-22,11,Kidswear,S,18
+2026-09-22,11,Kidswear,M,25
+2026-09-22,11,Kidswear,L,22
+2026-09-22,11,Kidswear,XL,14
+2026-09-22,11,Kidswear,XXL,10
+2026-09-22,12,Kidswear,XS,15
+2026-09-22,12,Kidswear,S,18
+2026-09-22,12,Kidswear,M,23
+2026-09-22,12,Kidswear,L,18
+2026-09-22,12,Kidswear,XL,12
+2026-09-22,12,Kidswear,XXL,10
+2026-09-22,13,Kidswear,XS,15
+2026-09-22,13,Kidswear,S,17
+2026-09-22,13,Kidswear,M,22
+2026-09-22,13,Kidswear,L,18
+2026-09-22,13,Kidswear,XL,11
+2026-09-22,13,Kidswear,XXL,10
+2026-09-22,14,Kidswear,XS,15
+2026-09-22,14,Kidswear,S,14
+2026-09-22,14,Kidswear,M,20
+2026-09-22,14,Kidswear,L,14
+2026-09-22,14,Kidswear,XL,11
+2026-09-22,14,Kidswear,XXL,10
+2026-09-22,15,Kidswear,XS,15
+2026-09-22,15,Kidswear,S,14
+2026-09-22,15,Kidswear,M,19
+2026-09-22,15,Kidswear,L,14
+2026-09-22,15,Kidswear,XL,10
+2026-09-22,15,Kidswear,XXL,10
+2026-09-22,16,Kidswear,XS,14
+2026-09-22,16,Kidswear,S,13
+2026-09-22,16,Kidswear,M,18
+2026-09-22,16,Kidswear,L,12
+2026-09-22,16,Kidswear,XL,9
+2026-09-22,16,Kidswear,XXL,10
+2026-09-22,17,Kidswear,XS,14
+2026-09-22,17,Kidswear,S,11
+2026-09-22,17,Kidswear,M,16
+2026-09-22,17,Kidswear,L,9
+2026-09-22,17,Kidswear,XL,8
+2026-09-22,17,Kidswear,XXL,10
+2026-09-22,18,Kidswear,XS,13
+2026-09-22,18,Kidswear,S,10
+2026-09-22,18,Kidswear,M,14
+2026-09-22,18,Kidswear,L,9
+2026-09-22,18,Kidswear,XL,8
+2026-09-22,18,Kidswear,XXL,9
+2026-09-22,19,Kidswear,XS,12
+2026-09-22,19,Kidswear,S,10
+2026-09-22,19,Kidswear,M,10
+2026-09-22,19,Kidswear,L,7
+2026-09-22,19,Kidswear,XL,5
+2026-09-22,19,Kidswear,XXL,8

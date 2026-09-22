@@ -57,17 +57,36 @@ RANDOM_SEED = 42
 PACE_THRESHOLD_PCT = 15
 
 # --- Starting stock (used in Phase 3 / 6a / 6e) ------------------------------
-# Total starting units per category per size, before any sales are
-# subtracted. Chosen high enough that a normal day doesn't sell out, so any
-# stockout in the data is a deliberate scenario, not an accident.
-STARTING_STOCK_PER_SIZE = {
-    "XS": 12,
-    "S": 18,
-    "M": 22,
-    "L": 20,
-    "XL": 12,
-    "XXL": 8,
+# Morning starting units per category per size, before any sales are
+# subtracted. Jeans, Formal Wear and Kidswear get generous stock, comfortably
+# above what they sell in a day, so nothing there runs low by accident.
+#
+# Womenswear and Chinos are deliberately tuned tight, against the actual
+# per-size cumulative sales the fixed seed produces, so that remaining stock
+# lands on the exact scenario from section 4 of the spec:
+#   - Womenswear: M and L (its best-selling sizes) hit zero right around the
+#     13:30 stockout, matching the sales data flattening from 14:00.
+#   - Chinos: M and L run out mid-afternoon (around CHINOS_DEPLETION_HOUR)
+#     while the other sizes keep a healthy buffer — so total remaining
+#     stock still looks fine even though the category can't sell to most
+#     shoppers. This is what makes it a "broken size run" and not a plain
+#     stockout.
+# If RANDOM_SEED or the sales generation logic changes, these numbers would
+# need to be recalibrated against the new sales data to keep the scenarios
+# landing on schedule.
+DEFAULT_STARTING_STOCK = {"XS": 15, "S": 20, "M": 25, "L": 22, "XL": 15, "XXL": 10}
+
+STARTING_STOCK = {
+    "Jeans": dict(DEFAULT_STARTING_STOCK),
+    "Formal Wear": {"XS": 10, "S": 12, "M": 18, "L": 15, "XL": 10, "XXL": 8},
+    "Kidswear": dict(DEFAULT_STARTING_STOCK),
+    "Womenswear": {"XS": 3, "S": 1, "M": 5, "L": 7, "XL": 1, "XXL": 2},
+    "Chinos": {"XS": 15, "S": 15, "M": 5, "L": 6, "XL": 20, "XXL": 10},
 }
+
+# A size is a "last piece" alert the moment it drops to exactly this many
+# units remaining (Phase 6a).
+LAST_PIECE_THRESHOLD = 1
 
 # --- Scenario store day ------------------------------------------------------
 # The single simulated "today" that all Phase 1-5 data is generated for.
@@ -121,3 +140,12 @@ CHINOS_SPILLOVER_RATE = 0.15
 # Average units per transaction, used to simulate a transactions count from
 # units sold. Real UPT for apparel stores is typically in this range.
 AVG_UPT = 1.5
+
+# --- Footfall / conversion (Phase 3, 6d) -------------------------------------
+# Baseline conversion rate (transactions / visitors) used to size simulated
+# footfall from a category's normal, non-scenario demand (target x hourly
+# shape). Footfall deliberately ignores the scenario multipliers above (the
+# Womenswear stockout, Chinos depletion) because footfall measures customer
+# *interest*, not whether they could buy. That is exactly what makes a
+# stockout diagnosable: footfall stays normal while conversion collapses.
+BASELINE_CONVERSION_RATE = 0.30
