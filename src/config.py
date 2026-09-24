@@ -56,6 +56,13 @@ RANDOM_SEED = 42
 # close. It is tunable here if the business wants a stricter or looser bar.
 PACE_THRESHOLD_PCT = 15
 
+# Business rule: don't judge a category until enough units were expected to
+# make the percentage meaningful. With only a handful of units expected,
+# ordinary hour-to-hour randomness produces huge % swings (e.g. 0 sold vs 1.8
+# expected reads as -100%), which would flash false "behind" alarms every
+# morning. Below this many expected units, status is "too_early" instead.
+MIN_EXPECTED_UNITS_FOR_STATUS = 5
+
 # --- Starting stock (used in Phase 3 / 6a / 6e) ------------------------------
 # Morning starting units per category per size, before any sales are
 # subtracted. Jeans, Formal Wear and Kidswear get generous stock, comfortably
@@ -149,3 +156,20 @@ AVG_UPT = 1.5
 # *interest*, not whether they could buy. That is exactly what makes a
 # stockout diagnosable: footfall stays normal while conversion collapses.
 BASELINE_CONVERSION_RATE = 0.30
+
+# --- AI agent (Phase 4) -------------------------------------------------------
+# Model name kept in one place so it can be swapped without touching agent
+# code. Use a current Claude Sonnet model.
+CLAUDE_MODEL = "claude-sonnet-5"
+CLAUDE_MAX_TOKENS = 1024
+
+# Safety cap on how many rounds of tool calls the agent can make while
+# answering a single question, so a confused loop can't run forever.
+MAX_TOOL_ITERATIONS = 6
+
+# The "current simulated hour" the agent and app treat as "right now" when a
+# tool doesn't get an explicit hour. 16:00 is mid-afternoon: late enough
+# that the Womenswear stockout and Chinos broken size run have both fully
+# played out, but early enough that there's still time in the day to act on
+# a recommendation. The Phase 7 Streamlit slider overrides this per session.
+DEFAULT_CURRENT_HOUR = 16

@@ -13,6 +13,7 @@ import pandas as pd
 from config import (
     CATEGORIES,
     CATEGORY_TARGETS,
+    MIN_EXPECTED_UNITS_FOR_STATUS,
     PACE_THRESHOLD_PCT,
     STORE_OPEN_HOUR,
     TOTAL_STORE_HOURS,
@@ -20,11 +21,17 @@ from config import (
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 SALES_PATH = os.path.join(DATA_DIR, "sales.csv")
+FOOTFALL_PATH = os.path.join(DATA_DIR, "footfall.csv")
 
 
 def load_sales_data():
     """Loads the simulated sales data from disk."""
     return pd.read_csv(SALES_PATH)
+
+
+def load_footfall_data():
+    """Loads the simulated footfall (visitor count) data from disk."""
+    return pd.read_csv(FOOTFALL_PATH)
 
 
 def _hours_elapsed(hour):
@@ -47,8 +54,9 @@ def get_category_pace(hour, category=None, sales_df=None):
         sold by this point in the day, assuming even pacing
       - pct_vs_pace: how far actual is from expected, as a percentage
         (positive = ahead, negative = behind)
-      - status: "behind", "ahead", or "on_pace" — see PACE_THRESHOLD_PCT
-        in config.py for the business rule behind this classification
+      - status: "behind", "ahead", "on_pace", or "too_early" — see
+        PACE_THRESHOLD_PCT and MIN_EXPECTED_UNITS_FOR_STATUS in config.py
+        for the business rules behind this classification
 
     Returns a list of dicts (one per category), so it serializes cleanly
     as a tool result for the Claude agent in Phase 4.
@@ -80,11 +88,15 @@ def get_category_pace(hour, category=None, sales_df=None):
         else:
             pct_vs_pace = 0.0
 
+        # Business rule (config.MIN_EXPECTED_UNITS_FOR_STATUS): too few units
+        # expected yet for the percentage to mean anything.
         # Business rule (config.PACE_THRESHOLD_PCT): more than 15% under
         # pace is "behind", more than 15% over is "ahead", otherwise
         # "on_pace". Chosen because a category more than 15% behind by
         # mid-afternoon is unlikely to recover without intervention.
-        if pct_vs_pace < -PACE_THRESHOLD_PCT:
+        if expected_units_by_now < MIN_EXPECTED_UNITS_FOR_STATUS:
+            status = "too_early"
+        elif pct_vs_pace < -PACE_THRESHOLD_PCT:
             status = "behind"
         elif pct_vs_pace > PACE_THRESHOLD_PCT:
             status = "ahead"
@@ -121,6 +133,46 @@ def _print_verification(hour):
     print(
         "\nCheck: Womenswear should read 'behind'; Kidswear should read 'ahead'."
     )
+
+
+def get_footfall(category=None, hour=None, footfall_df=None):
+    """
+    Visitor counts for one category (or all) at a given hour (or across the
+    whole day so far if hour is omitted). Used alongside get_category_pace
+    and get_conversion_metrics so the agent can tell a traffic problem
+    (low footfall) apart from a conversion problem (normal footfall, sales
+    still collapsed) — see Phase 6d.
+    """
+    if footfall_df is None:
+        footfall_df = load_footfall_data()
+
+    df = footfall_df
+    if category is not None:
+        df = df[df["category"] == category]
+    if hour is not None:
+        # Cumulative visitors so far today, matching how pace is reported.
+        df = df[df["hour"] <= hour]
+
+    grouped = df.groupby("category")["visitors"].sum().reset_index()
+
+    return [
+        {"category": row["category"], "hour": hour, "visitors": int(row["visitors"])}
+        for _, row in grouped.iterrows()
+    ]
+
+
+def get_conversion_metrics(category, hour, sales_df=None, footfall_df=None):
+    """
+    Conversion rate and units-per-transaction (UPT) for a category at a
+    given hour. This is a Phase 4 stub — full implementation lands in
+    Phase 6d, where it becomes the tool the agent uses to tell a traffic
+    problem apart from a conversion problem.
+    """
+    return {
+        "category": category,
+        "hour": hour,
+        "note": "Conversion rate and UPT are not yet available (Phase 6d).",
+    }
 
 
 if __name__ == "__main__":
