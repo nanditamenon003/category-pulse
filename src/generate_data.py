@@ -1,310 +1,367 @@
 """
 Simulated data generation for Category Pulse.
 
-Phase 1 builds `generate_sales()`, which writes data/sales.csv: one row per
-category, per hour, per size, for a single simulated store day. Later phases
-(3 and 6b) add footfall, stock, and historical data to this same file.
+Simulates days 1..TODAY_DAY of a store month, hour by hour, and writes:
+  - data/sales.csv     units sold, value and transactions, by category and size
+  - data/stock.csv     units remaining on the shelf after each hour, by size
+  - data/footfall.csv  visitors per floor zone per hour
 
-Everything here is simulated. There is no live POS integration. A fixed
-random seed (config.RANDOM_SEED) makes every run produce identical numbers,
-which matters because the four demo scenarios must be reliably reproducible.
+Sales and stock are simulated together: shoppers arrive with demand for a
+size, and a sale only happens if that size is on the shelf. That is why the
+demo scenarios (a stockout, a broken size run) are not hard-coded here — they
+emerge from the supply events configured in config.py (a missed delivery, a
+short delivery), the same way they would in a real store.
+
+Everything is simulated from a fixed random seed, so every run is identical.
 """
 
+import math
 import os
 
 import numpy as np
 import pandas as pd
 
 from config import (
+    AVG_PRICE,
     AVG_UPT,
     BASELINE_CONVERSION_RATE,
     CATEGORIES,
-    CATEGORY_TARGETS,
-    CHINOS_DEPLETION_HOUR,
-    CHINOS_SPILLOVER_RATE,
-    CORE_SIZES,
-    HOURLY_SHAPE,
-    KIDSWEAR_OVERPERFORM_MULTIPLIER,
+    CATEGORY_DEPARTMENT,
+    CATEGORY_LINE,
+    CATEGORY_PRODUCT,
+    DAYS_IN_MONTH,
+    DELIVERY_WEEKDAY,
+    DEMAND_MULTIPLIER,
+    DEPARTMENTS,
+    LAST_YEAR_UNITS,
+    MIN_PAR_PER_SIZE,
+    MISSED_DELIVERIES,
+    MONTH_START,
+    MONTHLY_TARGETS,
+    PAR_WEEKS_OF_COVER,
+    PAR_WEEKS_OVERRIDE,
     RANDOM_SEED,
-    SIMULATED_DATE,
-    SIZES,
-    SIZE_WEIGHTS,
-    STARTING_STOCK,
+    SALE_DAY,
+    SALE_DAY_DISCOUNT,
+    SALE_DAY_MULTIPLIER,
+    SHORT_DELIVERIES,
+    SIZE_SWITCH_RATE,
     STORE_HOURS,
-    WOMENSWEAR_STOCKOUT_FLATLINE_HOUR,
-    WOMENSWEAR_STOCKOUT_FLATLINE_MULTIPLIER,
-    WOMENSWEAR_STOCKOUT_PARTIAL_HOUR,
-    WOMENSWEAR_STOCKOUT_PARTIAL_MULTIPLIER,
+    TODAY_DAY,
+    WEEKDAY_HOURLY_SHAPE,
+    WEEKDAY_WEIGHTS,
+    WEEKEND_HOURLY_SHAPE,
+    size_system_for,
 )
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 
-def _hour_total_units(rng, category, hour):
+# --- Calendar ---------------------------------------------------------------
+
+def month_calendar():
+    """One entry per day of the month: day number, date string, weekday."""
+    dates = pd.date_range(MONTH_START, periods=DAYS_IN_MONTH, freq="D")
+    return [
+        {"day": i + 1, "date": d.strftime("%Y-%m-%d"), "weekday": d.weekday()}
+        for i, d in enumerate(dates)
+    ]
+
+
+def day_weight(day_info):
+    """How busy a day is relative to others (weekends and the sale day sell more)."""
+    weight = WEEKDAY_WEIGHTS[day_info["weekday"]]
+    if day_info["day"] == SALE_DAY:
+        weight *= SALE_DAY_MULTIPLIER
+    return weight
+
+
+def hourly_shape(day_info):
+    """Weekends and the sale day skew toward the afternoon and evening."""
+    is_busy_day = day_info["weekday"] >= 5 or day_info["day"] == SALE_DAY
+    return WEEKEND_HOURLY_SHAPE if is_busy_day else WEEKDAY_HOURLY_SHAPE
+
+
+def expected_demand(category, day_info, hour, total_month_weight, include_scenarios=True):
     """
-    Expected total units sold for one category in one hour, before splitting
-    across sizes. Starts from the category's daily target times the normal
-    intra-day shape, then applies a scenario-specific multiplier so the four
-    deliberate test scenarios (section 4 of the spec) show up in the data.
-    Poisson noise keeps the numbers integer and realistically "bumpy"
-    instead of perfectly smooth.
+    Expected units shoppers want from one category in one hour. The monthly
+    target is spread across the month in proportion to how busy each day is,
+    then across the day by the hourly shape. The target is the store's plan,
+    so a category performing to plan has demand that adds up to its target.
     """
-    base_expected = CATEGORY_TARGETS[category] * HOURLY_SHAPE[hour]
-
-    multiplier = 1.0
-    if category == "Kidswear":
-        # Overperformance scenario: ahead of pace all day.
-        multiplier = KIDSWEAR_OVERPERFORM_MULTIPLIER
-    elif category == "Womenswear":
-        # Stockout scenario: normal until ~13:30, then flatlines.
-        if hour == WOMENSWEAR_STOCKOUT_PARTIAL_HOUR:
-            multiplier = WOMENSWEAR_STOCKOUT_PARTIAL_MULTIPLIER
-        elif hour >= WOMENSWEAR_STOCKOUT_FLATLINE_HOUR:
-            multiplier = WOMENSWEAR_STOCKOUT_FLATLINE_MULTIPLIER
-
-    expected = base_expected * multiplier
-    return int(rng.poisson(max(expected, 0.01)))
+    daily = MONTHLY_TARGETS[category] * day_weight(day_info) / total_month_weight
+    demand = daily * hourly_shape(day_info)[hour]
+    if include_scenarios:
+        demand *= DEMAND_MULTIPLIER.get(category, 1.0)
+    return demand
 
 
-def _split_units_across_sizes(rng, category, hour, total_units):
+# --- Stock ------------------------------------------------------------------
+
+def par_levels():
     """
-    Splits one hour's total units for a category across the six sizes.
-
-    Normally this just follows SIZE_WEIGHTS (M and L sell fastest). The
-    Chinos broken-size-run scenario is the exception: from
-    CHINOS_DEPLETION_HOUR onward, M and L are out of stock. Most shoppers
-    who wanted those sizes leave without buying rather than switching sizes
-    (CHINOS_SPILLOVER_RATE controls the small fraction who do switch), so
-    the realized total for the hour drops even though non-core sizes keep
-    selling at their normal rate. This is what makes the category quietly
-    fall behind pace while total remaining stock still looks fine.
+    The stock level each size is topped up to on delivery day: enough for
+    PAR_WEEKS_OF_COVER weeks of this category's actual expected sales (so
+    replenishment keeps up with a fast seller), never below MIN_PAR_PER_SIZE.
     """
-    if category == "Chinos" and hour >= CHINOS_DEPLETION_HOUR:
-        core_weight = sum(SIZE_WEIGHTS[s] for s in CORE_SIZES)
-        non_core_sizes = [s for s in SIZES if s not in CORE_SIZES]
-        non_core_weight = sum(SIZE_WEIGHTS[s] for s in non_core_sizes)
-
-        # Demand that was headed for M/L: most is lost, a small slice
-        # spills over to other sizes.
-        core_demand = total_units * core_weight
-        spillover_units = core_demand * CHINOS_SPILLOVER_RATE
-
-        realized_total = int(round(total_units * non_core_weight + spillover_units))
-        realized_total = min(realized_total, total_units)
-
-        probs = np.array([SIZE_WEIGHTS[s] / non_core_weight for s in non_core_sizes])
-        counts = rng.multinomial(realized_total, probs) if realized_total > 0 else np.zeros(
-            len(non_core_sizes), dtype=int
+    levels = {}
+    for category in CATEGORIES:
+        weekly_units = (
+            MONTHLY_TARGETS[category] * DEMAND_MULTIPLIER.get(category, 1.0) * 7 / DAYS_IN_MONTH
         )
-
-        units_by_size = {s: 0 for s in SIZES}
-        for s, c in zip(non_core_sizes, counts):
-            units_by_size[s] = int(c)
-        return units_by_size
-
-    probs = np.array([SIZE_WEIGHTS[s] for s in SIZES])
-    counts = rng.multinomial(total_units, probs) if total_units > 0 else np.zeros(
-        len(SIZES), dtype=int
-    )
-    return {s: int(c) for s, c in zip(SIZES, counts)}
+        weeks = PAR_WEEKS_OVERRIDE.get(category, PAR_WEEKS_OF_COVER)
+        system = size_system_for(category)
+        levels[category] = {
+            size: max(MIN_PAR_PER_SIZE, math.ceil(weekly_units * weeks * weight))
+            for size, weight in zip(system["sizes"], system["weights"])
+        }
+    return levels
 
 
-def _transactions_for_hour(rng, units_sold):
+def deliver(stock, par, day):
     """
-    Simulates a transaction count from units sold using an average units-
-    per-transaction (UPT). Transactions is a category-hour level figure
-    (not per size), needed later for UPT and conversion-rate calculations.
+    Weekly delivery: top every size back up to par. Scenario gaps: a missed
+    delivery ships nothing; a short delivery can't ship some sizes, and the
+    warehouse substitutes the same number of units spread across the sizes it
+    does have (in proportion to their normal sales mix).
     """
+    for category in CATEGORIES:
+        if day in MISSED_DELIVERIES.get(category, []):
+            continue
+        missing_sizes = SHORT_DELIVERIES.get(category, {}).get(day, [])
+        top_up = {
+            size: max(0, level - stock[category][size])
+            for size, level in par[category].items()
+        }
+
+        substitute_units = sum(top_up[s] for s in missing_sizes)
+        if substitute_units:
+            system = size_system_for(category)
+            available = {
+                s: w for s, w in zip(system["sizes"], system["weights"]) if s not in missing_sizes
+            }
+            total_weight = sum(available.values())
+            for size in missing_sizes:
+                top_up[size] = 0
+            for size, weight in available.items():
+                top_up[size] += round(substitute_units * weight / total_weight)
+
+        for size, units in top_up.items():
+            stock[category][size] += units
+
+
+# --- Selling ------------------------------------------------------------------
+
+def sell_one_hour(rng, category, demand_units, stock):
+    """
+    Turns an hour's demand into actual sales, limited by what's on the shelf.
+    Each shopper wants a particular size. If it's out of stock, most walk
+    away; a small share (SIZE_SWITCH_RATE) take another size that is in stock.
+    Returns units sold per size and updates `stock` in place.
+    """
+    system = size_system_for(category)
+    sizes, weights = system["sizes"], system["weights"]
+    wanted = rng.multinomial(demand_units, weights) if demand_units else [0] * len(sizes)
+
+    sold = {size: 0 for size in sizes}
+    unmet = 0
+    for size, want in zip(sizes, wanted):
+        units = min(int(want), stock[category][size])
+        sold[size] += units
+        stock[category][size] -= units
+        unmet += int(want) - units
+
+    switchers = int(rng.binomial(unmet, SIZE_SWITCH_RATE)) if unmet else 0
+    for _ in range(switchers):
+        available = [(s, w) for s, w in zip(sizes, weights) if stock[category][s] > 0]
+        if not available:
+            break
+        names = [s for s, _ in available]
+        probs = np.array([w for _, w in available])
+        choice = rng.choice(names, p=probs / probs.sum())
+        sold[choice] += 1
+        stock[category][choice] -= 1
+
+    return sold
+
+
+def transactions_for(rng, units_sold):
+    """A transaction count from units sold, using the average units per transaction."""
     if units_sold <= 0:
         return 0
-    expected_transactions = units_sold / AVG_UPT
-    transactions = int(rng.poisson(max(expected_transactions, 0.01)))
-    # A transaction always contains at least 1 unit, so transactions can
-    # never exceed units sold; and if anything sold, at least one
-    # transaction happened.
-    transactions = max(1, min(transactions, units_sold))
-    return transactions
+    transactions = int(rng.poisson(units_sold / AVG_UPT))
+    # Every transaction has at least one unit, and if anything sold, at least
+    # one transaction happened.
+    return max(1, min(transactions, units_sold))
 
 
-def generate_sales():
+def simulate_store():
     """
-    Generates one simulated store day of hourly, size-level unit sales for
-    every category, and returns it as a DataFrame with columns:
-    date, hour, category, size, units_sold, transactions.
+    Simulates days 1..TODAY_DAY hour by hour. Returns (sales_df, stock_df).
+    Stock rows record what is left on the shelf at the end of each hour.
     """
     rng = np.random.default_rng(RANDOM_SEED)
-    rows = []
+    calendar = month_calendar()
+    total_month_weight = sum(day_weight(d) for d in calendar)
 
-    for category in CATEGORIES:
+    par = par_levels()
+    stock = {category: dict(levels) for category, levels in par.items()}
+
+    sales_rows, stock_rows = [], []
+    for day_info in calendar[:TODAY_DAY]:
+        day = day_info["day"]
+        if day_info["weekday"] == DELIVERY_WEEKDAY:
+            deliver(stock, par, day)
+
+        price_factor = (1 - SALE_DAY_DISCOUNT) if day == SALE_DAY else 1.0
+
         for hour in STORE_HOURS:
-            total_units = _hour_total_units(rng, category, hour)
-            units_by_size = _split_units_across_sizes(rng, category, hour, total_units)
-            actual_total = sum(units_by_size.values())
-            transactions = _transactions_for_hour(rng, actual_total)
+            for category in CATEGORIES:
+                demand = int(rng.poisson(
+                    expected_demand(category, day_info, hour, total_month_weight)
+                ))
+                sold = sell_one_hour(rng, category, demand, stock)
+                units = sum(sold.values())
+                transactions = transactions_for(rng, units)
+                price = AVG_PRICE[category] * price_factor
 
-            for size in SIZES:
-                rows.append(
-                    {
-                        "date": SIMULATED_DATE,
-                        "hour": hour,
-                        "category": category,
+                common = {
+                    "date": day_info["date"],
+                    "day": day,
+                    "hour": hour,
+                    "department": CATEGORY_DEPARTMENT[category],
+                    "line": CATEGORY_LINE[category],
+                    "category": category,
+                }
+                for size, size_units in sold.items():
+                    sales_rows.append({
+                        **common,
+                        "product_type": CATEGORY_PRODUCT[category],
                         "size": size,
-                        "units_sold": units_by_size[size],
-                        # Same transactions figure repeated on every size
-                        # row for this category-hour (denormalized on
-                        # purpose, so a size-level row can still be summed
-                        # or grouped without a separate lookup).
+                        "units_sold": size_units,
+                        "value": round(size_units * price, 2),
+                        # Category-hour total, repeated on each size row so a
+                        # size-level row still carries it (take it once per
+                        # category-hour when aggregating).
                         "transactions": transactions,
-                    }
-                )
+                    })
+                    stock_rows.append({
+                        **common,
+                        "size": size,
+                        "units_remaining": stock[category][size],
+                    })
 
-    return pd.DataFrame(rows)
+    return pd.DataFrame(sales_rows), pd.DataFrame(stock_rows)
 
 
 def generate_footfall():
     """
-    Generates hourly visitor counts per category (data/footfall.csv).
-
-    Footfall is sized from each category's *normal* demand (daily target x
-    hourly shape) and a baseline conversion rate — deliberately ignoring the
-    scenario multipliers applied to sales. Real customer interest in a
-    section doesn't drop just because the shelf is empty, so this is what
-    lets the agent later tell a traffic problem (low footfall) apart from a
-    conversion problem (normal footfall, collapsed sales) — see Phase 6d.
+    Visitors per floor zone per hour, sized from each zone's *normal* demand
+    (no scenario effects) and a baseline conversion rate. Uses its own random
+    stream so it never shifts the sales simulation.
     """
-    rng = np.random.default_rng(RANDOM_SEED)
+    rng = np.random.default_rng(RANDOM_SEED + 1)
+    calendar = month_calendar()
+    total_month_weight = sum(day_weight(d) for d in calendar)
+
     rows = []
-
-    for category in CATEGORIES:
+    for day_info in calendar[:TODAY_DAY]:
         for hour in STORE_HOURS:
-            normal_units = CATEGORY_TARGETS[category] * HOURLY_SHAPE[hour]
-            normal_transactions = normal_units / AVG_UPT
-            expected_visitors = normal_transactions / BASELINE_CONVERSION_RATE
-            visitors = int(rng.poisson(max(expected_visitors, 0.01)))
-
-            rows.append(
-                {
-                    "date": SIMULATED_DATE,
+            for zone in DEPARTMENTS:
+                normal_units = sum(
+                    expected_demand(c, day_info, hour, total_month_weight, include_scenarios=False)
+                    for c in CATEGORIES
+                    if CATEGORY_DEPARTMENT[c] == zone
+                )
+                expected_visitors = normal_units / AVG_UPT / BASELINE_CONVERSION_RATE
+                rows.append({
+                    "date": day_info["date"],
+                    "day": day_info["day"],
                     "hour": hour,
-                    "category": category,
-                    "visitors": visitors,
-                }
-            )
-
+                    "zone": zone,
+                    "visitors": int(rng.poisson(expected_visitors)),
+                })
     return pd.DataFrame(rows)
 
 
-def generate_stock(sales_df):
-    """
-    Generates hourly remaining-stock-by-size (data/stock.csv) by subtracting
-    cumulative units sold from each category/size's starting stock
-    (config.STARTING_STOCK). Remaining stock is floored at zero.
+# --- Verification output ------------------------------------------------------
 
-    Starting stock is deliberately tuned per category (see the comment on
-    STARTING_STOCK in config.py) so remaining stock lands on the Womenswear
-    stockout and Chinos broken-size-run scenarios at the right time of day.
-    """
-    cumulative = (
-        sales_df.sort_values("hour")
-        .groupby(["category", "size"])["units_sold"]
-        .cumsum()
-    )
-    sales_with_cumulative = sales_df.assign(cumulative_sold=cumulative)
+def _print_target_sheet(sales_df):
+    """The store's familiar month-to-date sheet: LY / Target / Sold / Balance."""
+    sold = sales_df.groupby("category")["units_sold"].sum()
+    print(f"\nMonth-to-date at close of day {TODAY_DAY} (the store's usual target sheet):\n")
+    print(f"{'Line':<7}{'Category':<18}{'LY':>6}{'Target':>8}{'Sold':>7}{'Balance':>9}")
+    current_line = None
+    for category in CATEGORIES:
+        line = CATEGORY_LINE[category]
+        if line != current_line:
+            print("-" * 55)
+            current_line = line
+        target = MONTHLY_TARGETS[category]
+        s = int(sold.get(category, 0))
+        print(
+            f"{line:<7}{CATEGORY_PRODUCT[category]:<18}{LAST_YEAR_UNITS[category]:>6}"
+            f"{target:>8}{s:>7}{s - target:>9}"
+        )
+    print("-" * 55)
+    print(f"{'Store total':<25}{sum(MONTHLY_TARGETS.values()):>14}{int(sold.sum()):>7}")
 
-    rows = []
-    for _, row in sales_with_cumulative.iterrows():
-        starting = STARTING_STOCK[row["category"]][row["size"]]
-        remaining = max(0, starting - row["cumulative_sold"])
-        rows.append(
-            {
-                "date": row["date"],
-                "hour": row["hour"],
-                "category": row["category"],
-                "size": row["size"],
-                "units_remaining": int(remaining),
-            }
+
+def _print_daily_rhythm(sales_df):
+    calendar = {d["day"]: d for d in month_calendar()}
+    names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    daily = sales_df.groupby("day")["units_sold"].sum()
+    print("\nStore units per day (weekends and the sale day should stand out):\n")
+    for day, units in daily.items():
+        tag = "  <- sale day" if day == SALE_DAY else ""
+        print(f"  day {day:>2} {names[calendar[day]['weekday']]}  {units:>4}{tag}")
+
+
+def _print_scenario(sales_df, stock_df, footfall_df, category, label):
+    core = size_system_for(category)["core"]
+    s = sales_df[sales_df["category"] == category]
+    st = stock_df[(stock_df["category"] == category) & (stock_df["hour"] == STORE_HOURS[-1])]
+    daily_sold = s.groupby("day")["units_sold"].sum()
+    total_left = st.groupby("day")["units_remaining"].sum()
+    core_left = st[st["size"].isin(core)].groupby("day")["units_remaining"].sum()
+    zone = footfall_df[footfall_df["zone"] == CATEGORY_DEPARTMENT[category]]
+    zone_visitors = zone.groupby("day")["visitors"].sum()
+
+    print(f"\n{label}: {category} (core sizes {', '.join(core)}), days 14-{TODAY_DAY}\n")
+    print(f"  {'day':>4}{'sold':>6}{'stock left':>12}{'core left':>11}{'zone visitors':>15}")
+    for day in range(14, TODAY_DAY + 1):
+        print(
+            f"  {day:>4}{int(daily_sold.get(day, 0)):>6}{int(total_left.get(day, 0)):>12}"
+            f"{int(core_left.get(day, 0)):>11}{int(zone_visitors.get(day, 0)):>15}"
         )
 
-    return pd.DataFrame(rows)
 
-
-def _print_sales_verification(df):
-    """Prints an hours x categories pivot of total units sold, per spec."""
-    pivot = df.pivot_table(
-        index="hour", columns="category", values="units_sold", aggfunc="sum"
-    )[CATEGORIES]
-    print("\nUnits sold by hour x category:\n")
-    print(pivot.to_string())
-
-    print("\nDaily totals vs targets:\n")
-    totals = pivot.sum()
-    for category in CATEGORIES:
-        target = CATEGORY_TARGETS[category]
-        actual = totals[category]
-        pct = (actual - target) / target * 100
-        print(f"  {category:<14} actual={actual:>4}  target={target:>4}  ({pct:+.0f}%)")
-
-    print(
-        "\nCheck: Womenswear should visibly flatten after 14:00; "
-        "Kidswear should be clearly high (ahead of target)."
-    )
-
-
-def _print_footfall_verification(footfall_df):
-    """Prints Womenswear footfall before vs after its 13:30 stockout."""
-    womenswear = footfall_df[footfall_df["category"] == "Womenswear"].set_index("hour")[
-        "visitors"
-    ]
-    before = womenswear.loc[10:13].mean()
-    after = womenswear.loc[14:19].mean()
-    print("\nWomenswear footfall, before vs after the 13:30 stockout:\n")
-    print(womenswear.to_string())
-    print(f"\n  avg visitors 10:00-13:00 = {before:.1f}")
-    print(f"  avg visitors 14:00-19:00 = {after:.1f}")
-    print(
-        "\nCheck: footfall should stay roughly similar before and after "
-        "14:00, even though sales collapsed — traffic is fine, conversion "
-        "is what broke."
-    )
-
-
-def _print_stock_verification(stock_df):
-    """Prints remaining stock for the sizes that should hit zero on schedule."""
-    print("\nWomenswear M/L remaining stock by hour:\n")
-    ww = stock_df[
-        (stock_df["category"] == "Womenswear") & (stock_df["size"].isin(["M", "L"]))
-    ].pivot_table(index="hour", columns="size", values="units_remaining")
-    print(ww.to_string())
-
-    print("\nChinos M/L remaining stock by hour:\n")
-    chinos = stock_df[
-        (stock_df["category"] == "Chinos") & (stock_df["size"].isin(["M", "L"]))
-    ].pivot_table(index="hour", columns="size", values="units_remaining")
-    print(chinos.to_string())
-
-    print(
-        "\nCheck: Womenswear M/L should hit 0 around hour 13; "
-        "Chinos M/L should hit 0 around the mid-afternoon depletion hour."
-    )
+def _print_unplanned_stockouts(stock_df):
+    """Sizes that hit zero in categories with no deliberate supply scenario."""
+    scenario = set(MISSED_DELIVERIES) | set(SHORT_DELIVERIES)
+    zero = stock_df[(stock_df["units_remaining"] == 0) & ~stock_df["category"].isin(scenario)]
+    print("\nUnplanned stockouts (non-scenario categories, size-hours at zero):")
+    if zero.empty:
+        print("  none")
+        return
+    summary = zero.groupby(["category", "size"])["day"].agg(["min", "count"])
+    for (category, size), row in summary.iterrows():
+        print(f"  {category} size {size}: first on day {row['min']}, {row['count']} hours at zero")
 
 
 if __name__ == "__main__":
     os.makedirs(DATA_DIR, exist_ok=True)
 
-    sales_df = generate_sales()
-    sales_path = os.path.join(DATA_DIR, "sales.csv")
-    sales_df.to_csv(sales_path, index=False)
-    print(f"Wrote {len(sales_df)} rows to {sales_path}")
-    _print_sales_verification(sales_df)
-
+    sales_df, stock_df = simulate_store()
     footfall_df = generate_footfall()
-    footfall_path = os.path.join(DATA_DIR, "footfall.csv")
-    footfall_df.to_csv(footfall_path, index=False)
-    print(f"\nWrote {len(footfall_df)} rows to {footfall_path}")
-    _print_footfall_verification(footfall_df)
 
-    stock_df = generate_stock(sales_df)
-    stock_path = os.path.join(DATA_DIR, "stock.csv")
-    stock_df.to_csv(stock_path, index=False)
-    print(f"\nWrote {len(stock_df)} rows to {stock_path}")
-    _print_stock_verification(stock_df)
+    for name, df in (("sales", sales_df), ("stock", stock_df), ("footfall", footfall_df)):
+        path = os.path.join(DATA_DIR, f"{name}.csv")
+        df.to_csv(path, index=False)
+        print(f"Wrote {len(df):>6} rows to data/{name}.csv")
+
+    _print_target_sheet(sales_df)
+    _print_daily_rhythm(sales_df)
+    _print_scenario(sales_df, stock_df, footfall_df, "Womens Knit Top", "Stockout scenario")
+    _print_scenario(sales_df, stock_df, footfall_df, "THM Non Denim Bottom", "Broken size run scenario")
+    _print_unplanned_stockouts(stock_df)

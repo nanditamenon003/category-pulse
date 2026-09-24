@@ -7,6 +7,10 @@ __pycache__/
 .venv/
 venv/
 
+# Generated data (recreate with: python src/generate_data.py) and any real store exports
+data/*.csv
+data/real/
+
 # Streamlit
 .streamlit/secrets.toml
 
