@@ -19,6 +19,8 @@ from config import (
     CATEGORY_PRODUCT,
     DAYS_IN_MONTH,
     DEFAULT_CURRENT_HOUR,
+    DEPARTMENTS,
+    DRIFTING_Z,
     LAST_YEAR_UNITS,
     LINES,
     MIN_EXPECTED_UNITS_FOR_STATUS,
@@ -28,6 +30,7 @@ from config import (
     REQUIRED_RATE_STRETCH,
     STORE_HOURS,
     TODAY_DAY,
+    day_weight,
     is_busy_day,
     month_calendar,
 )
@@ -70,11 +73,7 @@ def typical_share_of_day_sold(sales_df, day, hour):
     Learned from the data rather than assumed, so it works the same on real
     store exports. Falls back to an even spread if there's no history yet.
     """
-    calendar = {d["day"]: d for d in month_calendar()}
-    busy = is_busy_day(calendar[day])
-    similar_days = [d for d in range(1, day) if is_busy_day(calendar[d]) == busy]
-
-    history = sales_df[sales_df["day"].isin(similar_days)]
+    history = sales_df[sales_df["day"].isin(_similar_past_days(day))]
     by_hour = history.groupby("hour")["units_sold"].sum().reindex(STORE_HOURS, fill_value=0)
     if by_hour.sum() == 0:
         return (STORE_HOURS.index(hour) + 1) / len(STORE_HOURS)
@@ -83,13 +82,13 @@ def typical_share_of_day_sold(sales_df, day, hour):
 
 def classify_pace(expected, actual):
     """
-    Turns expected vs actual units into a status, using three business rules
-    from config.py:
+    Turns expected vs actual units into a status, using business rules from
+    config.py:
       - MIN_EXPECTED_UNITS_FOR_STATUS: too few units expected -> "too_early"
       - PACE_THRESHOLD_PCT: the 15% line for behind / ahead
-      - NORMAL_VARIATION_Z: the gap must also be bigger than ordinary
-        randomness. Past -15% but within normal variation is "drifting"
-        (worth watching, not proven); past +15% within noise is just on pace.
+      - NORMAL_VARIATION_Z / DRIFTING_Z: the gap must also be bigger than
+        ordinary randomness. Past -15% with strong evidence is "behind", with
+        some evidence "drifting" (worth watching), otherwise just on pace.
     Returns (status, pct_vs_pace, gap_beyond_normal_variation).
     """
     if expected <= 0:
@@ -97,13 +96,16 @@ def classify_pace(expected, actual):
 
     pct = (actual - expected) / expected * 100
     # Unit sales counts naturally vary by about the square root of the
-    # expected number, so a gap is "real" only beyond Z of those swings.
-    beyond_noise = abs(actual - expected) > NORMAL_VARIATION_Z * math.sqrt(expected)
+    # expected number: that's one "normal swing".
+    swings = abs(actual - expected) / math.sqrt(expected)
+    beyond_noise = swings > NORMAL_VARIATION_Z
 
     if expected < MIN_EXPECTED_UNITS_FOR_STATUS:
         status = "too_early"
-    elif pct < -PACE_THRESHOLD_PCT:
-        status = "behind" if beyond_noise else "drifting"
+    elif pct < -PACE_THRESHOLD_PCT and beyond_noise:
+        status = "behind"
+    elif pct < -PACE_THRESHOLD_PCT and swings > DRIFTING_Z:
+        status = "drifting"
     elif pct > PACE_THRESHOLD_PCT and beyond_noise:
         status = "ahead"
     else:
@@ -248,12 +250,101 @@ def get_contribution(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, sales_df=None):
     }
 
 
-def get_footfall(category=None, hour=None, footfall_df=None):
+def _similar_past_days(day):
+    """Earlier days this month of the same kind as `day` (busy vs normal)."""
+    calendar = {d["day"]: d for d in month_calendar()}
+    busy = is_busy_day(calendar[day])
+    return [d for d in range(1, day) if is_busy_day(calendar[d]) == busy]
+
+
+def get_footfall(zone=None, category=None, line=None, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR,
+                 footfall_df=None):
     """
-    Visitor counts. Being rebuilt for per-zone footfall in the next step
-    (Phase 3 rebuild); not yet updated for the monthly data.
+    Visitors to a floor zone (Menswear / Womenswear / Kidswear) so far today,
+    compared with a typical day of the same kind by the same hour, plus the
+    daily totals for the last 7 days. Pass a zone, or a category/line to use
+    the zone it sits in.
+
+    Used with pace and conversion to tell a traffic problem (fewer visitors
+    than usual) apart from a conversion problem (normal visitors, but sales
+    still collapsed — usually stock, sizing, price or service).
     """
-    raise NotImplementedError("Footfall lookup is being rebuilt for per-zone data (Phase 3).")
+    _validate_moment(day, hour)
+    if footfall_df is None:
+        footfall_df = load_footfall_data()
+
+    if zone is None and category is not None:
+        zone = CATEGORY_DEPARTMENT[category]
+    if zone is None and line is not None:
+        zone = LINES[line]
+    if zone not in DEPARTMENTS:
+        raise ValueError(f"zone must be one of {DEPARTMENTS} (or give a category/line)")
+
+    ff = footfall_df[footfall_df["zone"] == zone]
+    today = int(ff[(ff["day"] == day) & (ff["hour"] <= hour)]["visitors"].sum())
+
+    similar = _similar_past_days(day)
+    by_this_hour = ff[ff["day"].isin(similar) & (ff["hour"] <= hour)].groupby("day")["visitors"].sum()
+    typical = float(by_this_hour.mean()) if len(by_this_hour) else None
+
+    recent = ff[(ff["day"] < day) & (ff["day"] >= day - 7)].groupby("day")["visitors"].sum()
+
+    return {
+        "zone": zone,
+        "as_of": {"day": day, "hour": hour},
+        "visitors_today_so_far": today,
+        "typical_visitors_by_this_hour": round(typical, 1) if typical is not None else None,
+        "pct_vs_typical": round((today - typical) / typical * 100, 1) if typical else None,
+        "compared_with_days": similar,
+        "last_7_days_visitors": {int(d): int(v) for d, v in recent.items()},
+    }
+
+
+def get_today_pace(line=None, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, sales_df=None):
+    """
+    Today, hour by hour, for each line (or one line). Tracked at line level,
+    not category level, because most single categories sell only a few units
+    a day: hour-by-hour pace for them would be mostly noise.
+
+    Today's target for a line = its monthly target phased by how busy today
+    is (weekends and sale days carry more of the month). Expected by now =
+    today's target x the share of a typical day that has usually sold by this
+    hour, learned from this month's history.
+    """
+    _validate_moment(day, hour)
+    if sales_df is None:
+        sales_df = load_sales_data()
+
+    calendar = month_calendar()
+    today_info = calendar[day - 1]
+    today_share_of_month = day_weight(today_info) / sum(day_weight(d) for d in calendar)
+    share_by_now = typical_share_of_day_sold(sales_df, day, hour)
+
+    today_sales = sales_df[(sales_df["day"] == day) & (sales_df["hour"] <= hour)]
+    sold_by_line = today_sales.groupby("line")["units_sold"].sum()
+
+    lines = [line] if line is not None else list(LINES)
+    results = []
+    for ln in lines:
+        if ln not in LINES:
+            raise ValueError(f"Unknown line {ln!r}; lines are {list(LINES)}")
+        line_target = sum(MONTHLY_TARGETS[c] for c in CATEGORIES if CATEGORY_LINE[c] == ln)
+        target_today = line_target * today_share_of_month
+        expected = target_today * share_by_now
+        sold = int(sold_by_line.get(ln, 0))
+        status, pct, beyond_noise = classify_pace(expected, sold)
+        results.append({
+            "line": ln,
+            "department": LINES[ln],
+            "as_of": {"day": day, "hour": hour},
+            "target_today": round(target_today, 1),
+            "units_sold_today": sold,
+            "expected_by_now": round(expected, 1),
+            "pct_vs_pace": round(pct, 1),
+            "status": status,
+            "gap_beyond_normal_variation": beyond_noise,
+        })
+    return results
 
 
 def get_conversion_metrics(category, hour, sales_df=None, footfall_df=None):
@@ -320,6 +411,29 @@ def _print_contribution(day, hour):
     print("\nIntegrity checks passed: " + "; ".join(report["checks_passed"]))
 
 
+def _print_today_by_line(hours):
+    print(f"\nToday (day {TODAY_DAY}) by line — status as the day goes on\n")
+    snapshots = {h: {r["line"]: r for r in get_today_pace(hour=h)} for h in hours}
+    print(f"{'Line':<8}" + "".join(f"{f'{h}:00':>22}" for h in hours))
+    for ln in LINES:
+        cells = []
+        for h in hours:
+            r = snapshots[h][ln]
+            cells.append(f"{r['units_sold_today']}/{r['expected_by_now']:.0f} {_STATUS_LABEL[r['status']]}")
+        print(f"{ln:<8}" + "".join(f"{c:>22}" for c in cells))
+    print("  (cells show units sold today / expected by then, and status)")
+
+
+def _print_footfall():
+    print(f"\nFootfall today vs a typical day of the same kind, by {DEFAULT_CURRENT_HOUR}:00\n")
+    for zone in DEPARTMENTS:
+        f = get_footfall(zone=zone)
+        print(f"  {zone:<11} today {f['visitors_today_so_far']:>4}   typical "
+              f"{f['typical_visitors_by_this_hour']:>6}   ({f['pct_vs_typical']:+.0f}%)")
+
+
 if __name__ == "__main__":
     _print_pace_table(TODAY_DAY, DEFAULT_CURRENT_HOUR)
     _print_contribution(TODAY_DAY, DEFAULT_CURRENT_HOUR)
+    _print_today_by_line([11, 14, 16, 19])
+    _print_footfall()

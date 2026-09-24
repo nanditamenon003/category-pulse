@@ -255,12 +255,13 @@ MIN_EXPECTED_UNITS_FOR_STATUS = 5
 # Is a gap real, or just normal randomness? At this store's volumes many
 # categories sell only a few units a day, so a 15% gap can easily be chance.
 # Sales counts vary by roughly the square root of the expected number (e.g.
-# expected 100 -> about +/-10 is normal). A category is only called "behind"
-# or "ahead" if its gap is also bigger than this many of those normal swings;
-# a category past -15% but within normal variation is "drifting" (amber:
-# worth watching, not yet proven). 1.65 means a gap this large would happen
-# by chance only about 1 time in 20.
+# expected 100 -> about +/-10 is one normal swing). Past the 15% line:
+#   - "behind" / "ahead" needs a gap bigger than NORMAL_VARIATION_Z swings
+#     (1.65 = would happen by chance only about 1 time in 20)
+#   - "drifting" (amber: worth watching, not yet proven) needs a gap bigger
+#     than DRIFTING_Z swings, so a 1-unit miss early in the day stays quiet
 NORMAL_VARIATION_Z = 1.65
+DRIFTING_Z = 1.0
 
 # If a category needs more than this multiple of its current daily sales rate
 # to reach target by month end, flag it as unlikely without action: at 1.5x,
