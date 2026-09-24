@@ -36,50 +36,32 @@ from config import (
     LAST_YEAR_UNITS,
     MIN_PAR_PER_SIZE,
     MISSED_DELIVERIES,
-    MONTH_START,
     MONTHLY_TARGETS,
     PAR_WEEKS_OF_COVER,
     PAR_WEEKS_OVERRIDE,
     RANDOM_SEED,
     SALE_DAY,
     SALE_DAY_DISCOUNT,
-    SALE_DAY_MULTIPLIER,
     SHORT_DELIVERIES,
     SIZE_SWITCH_RATE,
     STORE_HOURS,
     TODAY_DAY,
     WEEKDAY_HOURLY_SHAPE,
-    WEEKDAY_WEIGHTS,
     WEEKEND_HOURLY_SHAPE,
+    day_weight,
+    is_busy_day,
+    month_calendar,
     size_system_for,
 )
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
 
 
-# --- Calendar ---------------------------------------------------------------
-
-def month_calendar():
-    """One entry per day of the month: day number, date string, weekday."""
-    dates = pd.date_range(MONTH_START, periods=DAYS_IN_MONTH, freq="D")
-    return [
-        {"day": i + 1, "date": d.strftime("%Y-%m-%d"), "weekday": d.weekday()}
-        for i, d in enumerate(dates)
-    ]
-
-
-def day_weight(day_info):
-    """How busy a day is relative to others (weekends and the sale day sell more)."""
-    weight = WEEKDAY_WEIGHTS[day_info["weekday"]]
-    if day_info["day"] == SALE_DAY:
-        weight *= SALE_DAY_MULTIPLIER
-    return weight
-
+# --- Demand model -------------------------------------------------------------
 
 def hourly_shape(day_info):
     """Weekends and the sale day skew toward the afternoon and evening."""
-    is_busy_day = day_info["weekday"] >= 5 or day_info["day"] == SALE_DAY
-    return WEEKEND_HOURLY_SHAPE if is_busy_day else WEEKDAY_HOURLY_SHAPE
+    return WEEKEND_HOURLY_SHAPE if is_busy_day(day_info) else WEEKDAY_HOURLY_SHAPE
 
 
 def expected_demand(category, day_info, hour, total_month_weight, include_scenarios=True):

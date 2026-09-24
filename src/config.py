@@ -8,6 +8,7 @@ All numbers are simulated and illustrative — no real store figures are used.
 """
 
 import math
+from datetime import date, timedelta
 
 # --- Store hours --------------------------------------------------------------
 # The store is open 10:00 to 20:00 (a 10-hour selling day). STORE_HOURS is the
@@ -44,6 +45,29 @@ WEEKEND_HOURLY_SHAPE = {
     10: 0.04, 11: 0.06, 12: 0.09, 13: 0.11, 14: 0.11,
     15: 0.10, 16: 0.11, 17: 0.13, 18: 0.14, 19: 0.11,
 }
+
+
+def month_calendar():
+    """One entry per day of the month: day number, date string, weekday (Mon=0)."""
+    start = date.fromisoformat(MONTH_START)
+    days = []
+    for i in range(DAYS_IN_MONTH):
+        d = start + timedelta(days=i)
+        days.append({"day": i + 1, "date": d.isoformat(), "weekday": d.weekday()})
+    return days
+
+
+def is_busy_day(day_info):
+    """Weekends and the sale day trade differently (busier, later in the day)."""
+    return day_info["weekday"] >= 5 or day_info["day"] == SALE_DAY
+
+
+def day_weight(day_info):
+    """How busy a day is relative to others (weekends and the sale day sell more)."""
+    weight = WEEKDAY_WEIGHTS[day_info["weekday"]]
+    if day_info["day"] == SALE_DAY:
+        weight *= SALE_DAY_MULTIPLIER
+    return weight
 
 # --- Store structure: department -> line -> category --------------------------------
 # Mirrors the store's own target sheet. Kidswear is split into Big Boys (BB),
@@ -227,6 +251,21 @@ PACE_THRESHOLD_PCT = 15
 # randomness produces huge % swings (0 sold vs 1.8 expected reads as -100%),
 # which would flash false alarms. Below this, status is "too_early".
 MIN_EXPECTED_UNITS_FOR_STATUS = 5
+
+# Is a gap real, or just normal randomness? At this store's volumes many
+# categories sell only a few units a day, so a 15% gap can easily be chance.
+# Sales counts vary by roughly the square root of the expected number (e.g.
+# expected 100 -> about +/-10 is normal). A category is only called "behind"
+# or "ahead" if its gap is also bigger than this many of those normal swings;
+# a category past -15% but within normal variation is "drifting" (amber:
+# worth watching, not yet proven). 1.65 means a gap this large would happen
+# by chance only about 1 time in 20.
+NORMAL_VARIATION_Z = 1.65
+
+# If a category needs more than this multiple of its current daily sales rate
+# to reach target by month end, flag it as unlikely without action: at 1.5x,
+# "keep doing what we're doing" clearly won't get there.
+REQUIRED_RATE_STRETCH = 1.5
 
 # A size is a "last piece" alert the moment it drops to exactly this many
 # units remaining (Phase 6a).
