@@ -272,6 +272,19 @@ REQUIRED_RATE_STRETCH = 1.5
 # units remaining (Phase 6a).
 LAST_PIECE_THRESHOLD = 1
 
+# Stock health rules (Phase 6e). "Usual stock" is learned from the data: the
+# category's typical end-of-day stock earlier this month.
+#   - stockout: total stock has fallen below STOCKOUT_MAX_SHARE of usual,
+#     so there is almost nothing left to sell in any size
+#   - broken size run: every core size is down to CORE_DEPLETED_MAX_UNITS or
+#     fewer, while total stock is still at least BROKEN_RUN_MIN_SHARE of usual.
+#     The category total looks fine, which is exactly why nobody notices,
+#     but most shoppers can't find their size.
+#   - running out: core sizes depleted and total stock in between
+STOCKOUT_MAX_SHARE = 0.10
+BROKEN_RUN_MIN_SHARE = 0.30
+CORE_DEPLETED_MAX_UNITS = 1
+
 # --- AI agent (Phase 4) -----------------------------------------------------------------
 # Model name kept in one place so it can be swapped without touching agent
 # code. Use a current Claude Sonnet model.
