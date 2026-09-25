@@ -290,9 +290,26 @@ def ask(question, current_hour=DEFAULT_CURRENT_HOUR, client=None):
         return answer, tool_call_log
 
     except APIError as e:
-        return f"The Claude API returned an error: {e}", tool_call_log
+        return _friendly_api_error(e), tool_call_log
     except Exception as e:
         return f"Something went wrong talking to Claude: {e}", tool_call_log
+
+
+def _friendly_api_error(error):
+    """Turns common API failures into a plain instruction instead of a raw error dump."""
+    import anthropic
+
+    if isinstance(error, anthropic.AuthenticationError):
+        return ("The API key in the .env file isn't being accepted. Check it was copied in full "
+                "from console.anthropic.com, then restart the app.")
+    if isinstance(error, anthropic.BadRequestError) and "credit balance" in str(error).lower():
+        return ("The AI chat needs API credits. Add a few dollars at console.anthropic.com "
+                "(Plans & Billing), then ask again. Everything else on this page works without it.")
+    if isinstance(error, anthropic.RateLimitError):
+        return "Too many questions in a short time. Wait a minute and try again."
+    if isinstance(error, anthropic.APIConnectionError):
+        return "Couldn't reach Claude. Check the internet connection and try again."
+    return f"The Claude API returned an error, so no answer this time. Details: {error}"
 
 
 def _terminal_loop():

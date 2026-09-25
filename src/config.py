@@ -18,6 +18,10 @@ STORE_CLOSE_HOUR = 20
 STORE_HOURS = list(range(STORE_OPEN_HOUR, STORE_CLOSE_HOUR))
 TOTAL_STORE_HOURS = len(STORE_HOURS)
 
+# Shown in the dashboard's top bar. A generic name, because every number in
+# this project is simulated.
+STORE_NAME = "Demo store (simulated data)"
+
 # --- The simulated month ----------------------------------------------------------
 # Targets are monthly, and the store checks them month-to-date. "Today" is day
 # 24: late enough that problems are real, early enough (7 days left) to act.

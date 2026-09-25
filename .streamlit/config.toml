@@ -1,0 +1,15 @@
+[theme]
+base = "light"
+# Accent for interactive elements only (buttons, links, selected states).
+primaryColor = "#3F51B5"
+backgroundColor = "#F7F7F5"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1A1A1A"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
+showSidebarNavigation = false
+
+[browser]
+gatherUsageStats = false

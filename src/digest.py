@@ -38,7 +38,7 @@ def _lower_first(text):
     return text[0].lower() + text[1:] if text else text
 
 
-def _month_paragraph(day, pace):
+def _month_paragraph(day, hour, pace):
     sold = sum(p["units_sold_so_far"] for p in pace)
     expected = sum(p["expected_units_by_now"] for p in pace)
     target = sum(p["monthly_target"] for p in pace)
@@ -46,7 +46,8 @@ def _month_paragraph(day, pace):
     pct = (sold - expected) / expected * 100
     standing = "right on pace" if abs(pct) < 3 else f"{abs(pct):.0f}% {'ahead' if pct > 0 else 'behind'}"
     weekday = WEEKDAYS[month_calendar()[day - 1]["weekday"]]
-    return (f"Close of day {day} ({weekday}), {DAYS_IN_MONTH - day} days left. The store has sold "
+    moment = f"Close of day {day}" if hour == STORE_HOURS[-1] else f"Day {day} at {hour + 1}:00"
+    return (f"{moment} ({weekday}), {DAYS_IN_MONTH - day} days left. The store has sold "
             f"{sold:,} units against about {expected:,.0f} expected, {standing}; at the current rate it "
             f"would finish near {projected:,} of its {target:,} target.")
 
@@ -55,8 +56,10 @@ def _problems_paragraph(diagnoses, ideas):
     behind = sorted((d for d in diagnoses if d["status"] == "behind"), key=lambda d: d["pct_vs_pace"])
     if not behind:
         return "No category is clearly behind pace."
+    explained = [d for d in behind if d["cause"] != "unclear"]
+    unexplained = [d for d in behind if d["cause"] == "unclear"]
     sentences = []
-    for d in behind:
+    for d in explained:
         sentence = (f"{d['category']} is {abs(d['pct_vs_pace']):.0f}% behind and "
                     f"{CAUSE_CLAUSE[d['cause']]}. Tomorrow: {_lower_first(d['action'])}")
         idea = ideas.get(d["category"])
@@ -66,6 +69,14 @@ def _problems_paragraph(diagnoses, ideas):
             elif idea["type"] == "complement_in_available_sizes":
                 sentence += f" Meanwhile, sell the plentiful sizes as an outfit with {idea['partner']}."
         sentences.append(sentence)
+    if unexplained:
+        names = _join(f"{d['category']} ({d['pct_vs_pace']:+.0f}%)" for d in unexplained)
+        verb = "is" if len(unexplained) == 1 else "are"
+        sentences.append(
+            f"{names} {verb} also behind, with no clear cause in the stock or visitor numbers. "
+            f"Tomorrow: check {'its' if len(unexplained) == 1 else 'their'} display and that every "
+            f"size is out on the floor."
+        )
     return " ".join(sentences)
 
 
@@ -125,7 +136,7 @@ def generate_digest(day=TODAY_DAY, hour=STORE_HOURS[-1], data=None):
                   if t["status"] == "behind"]
 
     paragraphs = [
-        _month_paragraph(day, pace),
+        _month_paragraph(day, hour, pace),
         _problems_paragraph(diagnoses, ideas),
         f"Watch, but don't act yet: {_join(drifting)} are slipping without a clear cause."
         if drifting else None,
