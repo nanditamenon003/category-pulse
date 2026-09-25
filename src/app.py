@@ -7,7 +7,7 @@ Layers:
   1. The frame (this file): name, data label, time button, top menu, and a
      floating "Ask Category Pulse" button on every page.
   2. Pages (views.py): Today, Categories, Stock, Floor and staff, Sell, Summary.
-  3. Pop-ups on top of a page: the chat, and (from step 2) category details.
+  3. Pop-ups on top of a page: category details and the chat.
 """
 
 import streamlit as st
@@ -51,5 +51,8 @@ with st.container(horizontal=True, horizontal_alignment="distribute", vertical_a
 pages.run()
 
 # --- Floating chat button, on every page ------------------------------------------------
-if st.button("Ask Category Pulse", key="chat_fab", icon=":material/forum:", type="primary"):
+# The chat also opens when a category pop-up hands over a question ("Ask the AI
+# about this category"): only one pop-up can be open at a time.
+clicked = st.button("Ask Category Pulse", key="chat_fab", icon=":material/forum:", type="primary")
+if clicked or st.session_state.pop("open_chat", False):
     views.chat_dialog()

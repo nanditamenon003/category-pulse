@@ -9,6 +9,7 @@ for interactive elements; one typeface (Inter); no shadows or gradients.
 """
 
 import html
+import re
 
 import pandas as pd
 import streamlit as st
@@ -17,6 +18,7 @@ import diagnosis
 import digest
 import generate_data
 import kpi
+import loyalty
 import stock
 from config import (
     CATEGORY_PRODUCT,
@@ -105,6 +107,57 @@ header[data-testid="stHeader"] {{ background: {PAGE}; border-bottom: 1px solid {
           margin: 10px 0 6px auto; max-width: 80%; width: fit-content; font-size: 14px; }}
 .cp-who {{ font-size: 12px; font-weight: 700; color: {MUTED}; margin: 4px 0 2px; }}
 
+/* Headline numbers */
+.cp-kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }}
+.cp-kpi {{ background: {CARD}; border: 1px solid {BORDER}; border-radius: 8px; padding: 12px 14px; }}
+.cp-kpi-label {{ font-size: 12px; color: {MUTED}; }}
+.cp-kpi-num {{ font-size: 28px; font-weight: 700; color: {TEXT}; line-height: 1.2; }}
+.cp-kpi-num.red {{ color: {RED}; }}
+.cp-kpi-sub {{ font-size: 12px; color: {MUTED}; }}
+
+/* Progress bar: sold vs monthly target, with a tick where it should be by now */
+.cp-track {{ position: relative; height: 6px; background: {BORDER}; border-radius: 3px;
+            margin: 8px 0 4px; max-width: 360px; }}
+.cp-fill {{ height: 6px; background: {TEXT}; border-radius: 3px; }}
+.cp-mark {{ position: absolute; top: -4px; width: 2px; height: 14px; background: {MUTED}; }}
+
+/* Cause tag, e.g. "Broken size run" */
+.cp-chip {{ display: inline-block; font-size: 11px; color: {TEXT}; border: 1px solid #C9C9C4;
+           border-radius: 10px; padding: 1px 8px; margin-left: 4px; }}
+
+/* A problem row in "Needs action now" */
+.cp-row {{ background: {CARD}; border: 1px solid {BORDER}; border-left: 4px solid {NEUTRAL};
+          border-radius: 0; padding: 12px 14px; display: flex; justify-content: space-between;
+          align-items: center; gap: 12px; }}
+.cp-row.red {{ border-left-color: {RED}; }}
+.cp-row.amber {{ border-left-color: {AMBER}; }}
+.cp-row.green {{ border-left-color: {GREEN}; }}
+.cp-row-name {{ font-size: 15px; font-weight: 700; color: {TEXT}; margin-top: 4px; }}
+.cp-row-text {{ font-size: 13px; color: {TEXT}; margin-top: 2px; }}
+.cp-chev {{ font-size: 26px; color: {MUTED}; line-height: 1; }}
+
+/* Clickable cards: an invisible button laid over the whole card. */
+[class*="st-key-click_"] {{ position: relative; }}
+[class*="st-key-click_"] [class*="st-key-open_"] {{ position: absolute; inset: 0; margin: 0; z-index: 2;
+                                                   width: 100% !important; height: 100% !important; }}
+[class*="st-key-click_"] [class*="st-key-open_"] div,
+[class*="st-key-click_"] [class*="st-key-open_"] button {{ width: 100% !important; height: 100% !important;
+                                                          max-width: none !important; }}
+[class*="st-key-click_"] [class*="st-key-open_"] button {{ opacity: 0; cursor: pointer; }}
+[class*="st-key-click_"]:hover .cp-row, [class*="st-key-click_"]:hover .cp-card {{
+    border-top-color: {ACCENT}; border-right-color: {ACCENT}; border-bottom-color: {ACCENT}; }}
+
+/* "Start here" panel and small panels */
+.cp-panel {{ background: {CARD}; border: 1px solid {BORDER}; border-radius: 8px; padding: 14px 16px; }}
+.cp-panel-title {{ font-size: 15px; font-weight: 700; color: {TEXT}; margin-bottom: 4px; }}
+.cp-panel p, .cp-panel li {{ font-size: 14px; color: {TEXT}; margin: 2px 0; }}
+.cp-do {{ background: {PAGE}; border: 1px solid {BORDER}; border-radius: 8px; padding: 10px 12px;
+         font-size: 14px; color: {TEXT}; margin-top: 8px; }}
+
+/* Text links (tertiary buttons) use the accent colour; pop-up bullets a touch smaller. */
+.stButton button[kind="tertiary"], .stButton button[kind="tertiary"] p {{ color: {ACCENT}; }}
+[role="dialog"] li, [role="dialog"] li p {{ font-size: 14px; }}
+
 /* Floating chat button, raised clear of Streamlit Cloud's corner badge. */
 .st-key-chat_fab {{ position: fixed; right: 24px; bottom: 84px; z-index: 1000; width: auto; }}
 .st-key-chat_fab button {{ border-radius: 22px; padding: 10px 18px; }}
@@ -178,10 +231,48 @@ def digest_at(hour):
     return digest.generate_digest(TODAY_DAY, hour, data=load_data())
 
 
+@st.cache_data(show_spinner=False)
+def diagnoses_at(hour):
+    """Likely cause, evidence and action for every category, keyed by category."""
+    return {d["category"]: d for d in diagnosis.diagnose_store(TODAY_DAY, hour, data=load_data())}
+
+
+@st.cache_data(show_spinner=False)
+def cross_sell_at(hour):
+    data = load_data()
+    ideas = loyalty.get_cross_sell_ideas(TODAY_DAY, hour, sales_df=data["sales_df"],
+                                         stock_df=data["stock_df"])
+    return {i["category"]: i for i in ideas}
+
+
+@st.cache_data(show_spinner="Looking up this category...")
+def category_detail_at(category, hour):
+    """Everything the category pop-up shows, fetched once per category and hour."""
+    data = load_data()
+    sales_df, stock_df, footfall_df = data["sales_df"], data["stock_df"], data["footfall_df"]
+    return {
+        "pace": kpi.get_category_pace(TODAY_DAY, hour, category=category, sales_df=sales_df)[0],
+        "stock": stock.get_stock_status(category, TODAY_DAY, hour, stock_df=stock_df),
+        "health": stock.check_size_runs(category, TODAY_DAY, hour, stock_df=stock_df),
+        "history": stock.get_stock_history(category, TODAY_DAY, hour, stock_df=stock_df,
+                                           sales_df=sales_df),
+        "cover": stock.get_days_of_cover(category, TODAY_DAY, hour, stock_df=stock_df,
+                                         sales_df=sales_df),
+        "conversion": kpi.get_conversion_metrics(category=category, day=TODAY_DAY, hour=hour,
+                                                 sales_df=sales_df, footfall_df=footfall_df),
+        "playbook": loyalty.get_tier_playbook(category),
+    }
+
+
 # --- Small HTML builders -------------------------------------------------------------
 
 def esc(text):
     return html.escape(str(text))
+
+
+def slug(text):
+    """A widget-key-safe version of a name, e.g. 'THM Non Denim Bottom' -> 'THM_Non_Denim_Bottom'."""
+    return re.sub(r"[^A-Za-z0-9]+", "_", str(text)).strip("_")
 
 
 def html_block(markup):
@@ -229,3 +320,41 @@ def line_card(t):
 
 def grid(cards):
     return '<div class="cp-grid">' + "".join(cards) + "</div>"
+
+
+CAUSE_TAG = {
+    "stockout": "Sold out",
+    "broken_size_run": "Broken size run",
+    "traffic_drop": "Fewer visitors",
+    "conversion_drop": "Fewer buyers",
+    "unclear": "No clear cause yet",
+}
+
+
+def cause_chip(cause):
+    tag = CAUSE_TAG.get(cause)
+    return f'<span class="cp-chip">{esc(tag)}</span>' if tag else ""
+
+
+def progress_bar(sold, target, expected):
+    """Sold vs target as a bar, with a tick marking where it should be by now."""
+    fill = min(sold / target, 1.0) * 100 if target else 0
+    mark = min(expected / target, 1.0) * 100 if target else 0
+    return (f'<div class="cp-track"><div class="cp-fill" style="width:{fill:.0f}%"></div>'
+            f'<div class="cp-mark" style="left:{mark:.0f}%"></div></div>')
+
+
+def kpi_card(label, value, sub="", tone=""):
+    return (f'<div class="cp-kpi"><div class="cp-kpi-label">{esc(label)}</div>'
+            f'<div class="cp-kpi-num {tone}">{esc(value)}</div>'
+            f'<div class="cp-kpi-sub">{esc(sub)}</div></div>')
+
+
+def clickable(key, markup, label):
+    """
+    Shows `markup` with an invisible button laid over it, so the whole card is
+    clickable. Returns True when clicked. `label` is read out by screen readers.
+    """
+    with st.container(key=f"click_{key}"):
+        html_block(markup)
+        return st.button(label, key=f"open_{key}")

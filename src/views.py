@@ -2,7 +2,9 @@
 The pages and pop-ups of the Category Pulse web app.
 
 Each page function draws one section of the site; app.py puts them in the
-top menu. Pop-ups (st.dialog) sit on top of whatever page is open.
+top menu. Pop-ups (st.dialog) sit on top of whatever page is open: the
+category detail and the chat. Only one pop-up can be open at a time, so
+"Ask the AI about this category" closes the detail and opens the chat.
 """
 
 import json
@@ -12,9 +14,10 @@ import pandas as pd
 import streamlit as st
 
 import agent
-from config import DEMO_QUESTION_LIMIT, LINES, STORE_HOURS
+from config import DEMO_QUESTION_LIMIT, LINES, STORE_HOURS, TODAY_DAY
 from ui import (
     AMBER,
+    BORDER,
     GREEN,
     MUTED,
     NEUTRAL,
@@ -22,19 +25,26 @@ from ui import (
     RED,
     STATUS,
     TEXT,
-    BORDER,
     category_card,
+    category_detail_at,
+    cause_chip,
+    clickable,
+    cross_sell_at,
     current_hour,
+    diagnoses_at,
     digest_at,
     esc,
     grid,
     heading,
     html_block,
+    kpi_card,
     last_pieces_at,
     line_card,
     pace_at,
     page_title,
     pill,
+    progress_bar,
+    slug,
     stock_health_at,
     time_label,
     today_at,
@@ -50,36 +60,275 @@ SUGGESTED_QUESTIONS = {
                                "focus on, and with what offer?"),
 }
 
+STOCK_VERDICT = {
+    "stockout": "Sold out: almost nothing left in any size.",
+    "broken_size_run": "Broken size run: the shelf looks full, but the core sizes are gone.",
+    "running_out": "Running out: core sizes gone and overall stock getting low.",
+    "healthy": "Core sizes are in stock.",
+}
 
-# --- Pieces shared by pages ------------------------------------------------------------
 
-def alert_banner(hour):
-    items = []
-    for r in stock_health_at(hour):
-        if r["verdict"] == "stockout":
-            items.append(f"<b>{esc(r['category'])}</b>: sold out, {r['total_remaining']} units left.")
-        elif r["verdict"] == "broken_size_run":
-            core = " and ".join(r["core_sizes"])
-            items.append(f"<b>{esc(r['category'])}</b>: broken size run. No {esc(core)}, "
-                         f"yet {r['total_remaining']} units sit on the shelf.")
-        else:
-            items.append(f"<b>{esc(r['category'])}</b>: core sizes gone and stock running low.")
+# --- Today ---------------------------------------------------------------------------------
 
-    alerts = last_pieces_at(hour)
-    for a in (a for a in alerts if a["is_core_size"]):
-        items.append(f"<b>{esc(a['category'])}</b>: last piece in {esc(a['size'])} (core size), "
-                     f"since {a['hour']}:00-{a['hour'] + 1}:00.")
-    others = [a for a in alerts if not a["is_core_size"]]
-    if others:
-        listed = ", ".join(f"{a['category']} {a['size']}" for a in others)
-        items.append(f"{len(others)} other size{'s' if len(others) > 1 else ''} down to the last "
-                     f"piece today: {esc(listed)}.")
+def _start_here():
+    if st.session_state.get("hide_start_here"):
+        return
+    html_block(
+        '<div class="cp-panel"><div class="cp-panel-title">Start here</div>'
+        f'<p>This is a demo store with simulated data, shown on day {TODAY_DAY} of a 31-day May. '
+        'The sales, stock and visitors are made up but behave like a real store, and a few real '
+        'problems are hidden in the numbers.</p>'
+        '<p><b>Try this:</b> tap <b>THM Non Denim Bottom</b> below to see why it\'s behind, '
+        'open <b>Ask Category Pulse</b> (bottom right) to question the data, or use the time '
+        'button (top right) to rewind the day.</p></div>'
+    )
+    if st.button("Got it, hide this", key="hide_start_btn", type="tertiary"):
+        st.session_state["hide_start_here"] = True
+        st.rerun()
 
-    if not items:
-        return ""
-    return ('<div class="cp-alert"><div class="cp-alert-title">Needs action now</div><ul>'
-            + "".join(f"<li>{i}</li>" for i in items) + "</ul></div>")
 
+def _problem_row(p, diag):
+    tone = STATUS[p["status"]][1]
+    evidence = diag["evidence"][1] if len(diag["evidence"]) > 1 and diag["cause"] in (
+        "stockout", "broken_size_run") else diag["headline"]
+    return (
+        f'<div class="cp-row {tone}"><div style="flex:1;min-width:0">'
+        f'{pill(p["status"])}{cause_chip(diag["cause"])}'
+        f'<div class="cp-row-name">{esc(p["category"])}</div>'
+        f'{progress_bar(p["units_sold_so_far"], p["monthly_target"], p["expected_units_by_now"])}'
+        f'<div class="cp-small">{p["units_sold_so_far"]} of {p["monthly_target"]} · '
+        f'{abs(p["pct_vs_pace"]):.0f}% {"behind" if p["pct_vs_pace"] < 0 else "ahead of"} pace · '
+        f'needs {p["needed_units_per_day"]:.1f}/day, selling {p["actual_units_per_day"]:.1f}/day</div>'
+        f'<div class="cp-row-text">{esc(evidence)}</div>'
+        f'</div><div class="cp-chev">&rsaquo;</div></div>'
+    )
+
+
+def _compact_row(tone, title, text):
+    return (f'<div class="cp-row {tone}"><div style="flex:1;min-width:0">'
+            f'<div class="cp-row-text"><b>{esc(title)}</b>: {esc(text)}</div></div>'
+            f'<div class="cp-chev">&rsaquo;</div></div>')
+
+
+def today_page():
+    hour = current_hour()
+    page_title("Today", f"The store at {time_label(hour)} on day {TODAY_DAY} of the month.")
+    _start_here()
+
+    pace = pace_at(hour)
+    by_category = {p["category"]: p for p in pace}
+    diags = diagnoses_at(hour)
+    lines_today = today_at(hour)
+
+    sold = sum(p["units_sold_so_far"] for p in pace)
+    expected = sum(p["expected_units_by_now"] for p in pace)
+    target = sum(p["monthly_target"] for p in pace)
+    projected = sum(p["projected_month_end_if_current_rate_continues"] for p in pace)
+    behind = sorted((p for p in pace if p["status"] == "behind"), key=lambda p: p["pct_vs_pace"])
+    drifting = sorted((p for p in pace if p["status"] == "drifting"), key=lambda p: p["pct_vs_pace"])
+    today_sold = sum(t["units_sold_today"] for t in lines_today)
+    today_expected = sum(t["expected_by_now"] for t in lines_today)
+
+    html_block('<div class="cp-kpis">'
+               + kpi_card("Month so far", f"{sold:,}", f"of about {expected:,.0f} expected by now")
+               + kpi_card("Month-end at this rate", f"{projected:,}", f"target {target:,} (a projection)")
+               + kpi_card("Need action", f"{len(behind)} behind", f"{len(drifting)} drifting",
+                          tone="red" if behind else "")
+               + kpi_card("Today so far", f"{today_sold}", f"of about {today_expected:.0f} by now")
+               + "</div>")
+
+    html_block(heading("Needs action now", "tap a category for the full picture"))
+    if not behind:
+        html_block('<div class="cp-panel"><p>Nothing is clearly behind right now.</p></div>')
+    for p in behind:
+        if clickable(f"today_{slug(p['category'])}", _problem_row(p, diags[p["category"]]),
+                     f"Open {p['category']}"):
+            category_dialog(p["category"])
+
+    behind_names = {p["category"] for p in behind}
+    stock_rows = [(r["category"], r["verdict"]) for r in stock_health_at(hour)
+                  if r["category"] not in behind_names]
+    core_pieces = [a for a in last_pieces_at(hour) if a["is_core_size"]]
+    if stock_rows or core_pieces:
+        html_block(heading("Stock alerts"))
+        for category, verdict in stock_rows:
+            if clickable(f"stock_{slug(category)}",
+                         _compact_row(STATUS[by_category[category]["status"]][1], category,
+                                      STOCK_VERDICT[verdict]), f"Open {category}"):
+                category_dialog(category)
+        for a in core_pieces:
+            text = (f"last piece in {a['size']} (a core size), since "
+                    f"{a['hour']}:00-{a['hour'] + 1}:00")
+            if clickable(f"piece_{slug(a['category'])}_{slug(a['size'])}",
+                         _compact_row(STATUS[by_category[a["category"]]["status"]][1],
+                                      a["category"], text), f"Open {a['category']}"):
+                category_dialog(a["category"])
+
+    if drifting:
+        html_block(heading("Keep an eye on", "slipping, but could still be normal ups and downs"))
+        for p in drifting:
+            text = f"{abs(p['pct_vs_pace']):.0f}% behind pace, needs {p['needed_units_per_day']:.1f}/day"
+            if clickable(f"drift_{slug(p['category'])}", _compact_row("amber", p["category"], text),
+                         f"Open {p['category']}"):
+                category_dialog(p["category"])
+
+    html_block(heading("Today so far, by line", "units sold today / expected by now")
+               + grid(line_card(t) for t in lines_today))
+
+
+# --- Category detail pop-up -------------------------------------------------------------------
+
+@st.dialog("Category details", width="large")
+def category_dialog(category):
+    hour = current_hour()
+    detail = category_detail_at(category, hour)
+    diag = diagnoses_at(hour)[category]
+    p = detail["pace"]
+
+    html_block(f'<div class="cp-title" style="margin-top:0">{esc(category)}</div>'
+               f'<div>{pill(p["status"])}{cause_chip(diag["cause"])}</div>'
+               f'<div class="cp-intro" style="margin-top:6px">{esc(diag["headline"])}</div>')
+
+    why, sizes, shoppers, sell = st.tabs(["Why", "Stock by size", "Shoppers", "Sell"])
+    with why:
+        _why_tab(p, diag)
+    with sizes:
+        _stock_tab(category, detail)
+    with shoppers:
+        _shoppers_tab(detail)
+    with sell:
+        _sell_tab(category, detail, hour)
+
+    if st.button("Ask the AI about this category", icon=":material/forum:", key="ask_about"):
+        status_word = STATUS[p["status"]][0].lower()
+        st.session_state["chat_pending"] = (f"{category} is {status_word} this month. Why, and what "
+                                            f"should the floor team do about it?")
+        st.session_state["open_chat"] = True
+        st.rerun()
+
+
+def _why_tab(p, diag):
+    html_block('<div class="cp-kpis">'
+               + kpi_card("Sold this month", f"{p['units_sold_so_far']}", f"of {p['monthly_target']} target")
+               + kpi_card("Expected by now", f"{p['expected_units_by_now']:.0f}",
+                          f"{p['pct_vs_pace']:+.0f}% vs pace")
+               + kpi_card("Selling per day", f"{p['actual_units_per_day']:.1f}",
+                          f"needs {p['needed_units_per_day']:.1f}/day to hit target")
+               + kpi_card("Month-end at this rate",
+                          f"{p['projected_month_end_if_current_rate_continues']}",
+                          "a projection, not a result")
+               + "</div>"
+               + progress_bar(p["units_sold_so_far"], p["monthly_target"], p["expected_units_by_now"]))
+
+    if p["status"] in ("behind", "drifting"):
+        html_block(heading("The evidence"))
+        for line in diag["evidence"]:
+            st.markdown(f"- {line}")
+    action = diag["action"] or "No action needed: this category is on track."
+    html_block(f'<div class="cp-do"><b>Do next:</b> {esc(action)}</div>')
+
+
+def _size_chart(stock_status):
+    core = set(stock_status["core_sizes"])
+    rows = []
+    for size, units in stock_status["remaining_by_size"].items():
+        out_core = size in core and units == 0
+        rows.append({
+            "Size": f"{size} (core)" if size in core else size,
+            "Units left": units,
+            "Label": "out" if out_core else str(units),
+            "Kind": "Core size, out" if out_core else ("Core size" if size in core else "Other size"),
+        })
+    df = pd.DataFrame(rows)
+    color = alt.Color("Kind:N", legend=None, scale=alt.Scale(
+        domain=["Core size, out", "Core size", "Other size"], range=[RED, TEXT, "#9A9A95"]))
+    bars = alt.Chart(df).mark_bar(size=34).encode(
+        x=alt.X("Size:N", sort=None, title=None, axis=alt.Axis(labelAngle=0)),
+        y=alt.Y("Units left:Q", title=None,
+                scale=alt.Scale(domain=[0, max(1, int(df["Units left"].max()))]),
+                axis=alt.Axis(grid=False, labels=False, ticks=False, domain=False)),
+        color=color, tooltip=["Size", "Units left"],
+    )
+    # An empty core size has no bar to see, so its label says "out" in red.
+    labels = bars.mark_text(dy=-8, fontSize=12, fontWeight="bold").encode(
+        text="Label:N",
+        color=alt.condition(alt.datum.Kind == "Core size, out", alt.value(RED), alt.value(TEXT)))
+    return (bars + labels).properties(height=170).configure_view(stroke=None).configure_axis(
+        labelFont="Inter", labelFontSize=12, labelColor=TEXT, domainColor=BORDER, tickColor=BORDER,
+    ).configure(background="#FFFFFF")
+
+
+def _stock_tab(category, detail):
+    health, status, history, cover = detail["health"], detail["stock"], detail["history"], detail["cover"]
+    html_block(f'<div class="cp-row-text"><b>{esc(STOCK_VERDICT[health["verdict"]])}</b> '
+               f'{status["total_remaining"]} units on the shelf, '
+               f'{health["total_as_pct_of_usual"]}% of its usual level.</div>')
+    st.altair_chart(_size_chart(status), width="stretch", theme=None)
+
+    risky = [s for s in cover["sizes"] if s["likely_out_before_next_delivery"]]
+    if risky:
+        names = ", ".join(s["size"] for s in risky)
+        html_block(f'<div class="cp-small">Projection: size {esc(names)} will likely run out before '
+                   f'the next delivery (day {cover["next_scheduled_delivery_day"]}).</div>')
+
+    html_block(heading("Deliveries this month"))
+    events = [(d, f"**Day {d}: scheduled delivery never arrived**")
+              for d in history["scheduled_deliveries_not_received"]]
+    for d in history["deliveries_received"]:
+        sizes = ", ".join(f"{s}: {u}" for s, u in d["by_size"].items() if u > 0)
+        missing = (f" · no {' or '.join(d['core_sizes_missing'])}" if d["core_sizes_missing"] else "")
+        events.append((d["day"], f"Day {d['day']}: {d['units_received']} units ({sizes}){missing}"))
+    for _, text in sorted(events):
+        st.markdown(f"- {text}")
+    if not events:
+        st.markdown("- No deliveries recorded this month.")
+
+
+def _shoppers_tab(detail):
+    c = detail["conversion"]
+    recent, baseline = c["recent_last_3_days_and_today"], c["baseline_earlier_this_month"]
+    change = c["visitors_change_vs_typical_pct"]
+    html_block('<div class="cp-kpis">'
+               + kpi_card(f"Visitors to {c['zone']}", f"{recent['zone_visitors']}",
+                          f"last 3 days + today, typical {c['typical_visitors_for_recent_days']}"
+                          f" ({change:+.0f}%)" if change is not None else "")
+               + kpi_card("Share who bought here", f"{recent['conversion_rate_pct']}%",
+                          f"was {baseline['conversion_rate_pct']}% earlier this month")
+               + kpi_card("Units per sale", f"{recent['units_per_transaction'] or 0}",
+                          f"was {baseline['units_per_transaction'] or 0}")
+               + "</div>")
+    html_block(f'<div class="cp-do"><b>Reading:</b> {esc(c["explanation"])}</div>')
+    html_block('<div class="cp-small" style="margin-top:8px">Visitors are counted per floor zone, so '
+               'this compares the category with everyone who visited its floor.</div>')
+
+
+def _sell_tab(category, detail, hour):
+    idea = cross_sell_at(hour).get(category)
+    if idea:
+        if idea.get("supply_action"):
+            html_block(f'<div class="cp-do"><b>First:</b> {esc(idea["supply_action"])}</div>')
+        html_block(f'<div class="cp-do"><b>At the till:</b> {esc(idea["at_the_till"])}</div>')
+    else:
+        html_block('<div class="cp-small">This category isn\'t behind, so there\'s no cross-sell '
+                   'push for it. Here is how each loyalty tier responds, if you want one.</div>')
+
+    playbook = detail["playbook"]
+    table = pd.DataFrame([
+        {
+            "Tier": t["tier"],
+            "Takes up cross-sells": f"{t['cross_sell_response_rate_pct']:.0f}%",
+            "Share of shoppers": f"{t['share_of_transactions_pct']}%",
+            "Offer at the till": t["offer_at_the_till"],
+        }
+        for t in playbook["tiers_ranked_by_response"]
+    ])
+    html_block(heading("Loyalty tiers", "best responders first"))
+    st.dataframe(table, hide_index=True, width="stretch")
+    html_block('<div class="cp-small">Targeting is by loyalty tier only. No individual customer data '
+               'is used, by design.</div>')
+
+
+# --- Other pages ------------------------------------------------------------------------------
 
 def pace_chart(pace):
     rows = []
@@ -118,38 +367,6 @@ def pace_chart(pace):
     ).configure(background=PAGE)
 
 
-# --- Pages -------------------------------------------------------------------------------
-
-def today_page():
-    hour = current_hour()
-    page_title("Today", f"Where the month stands at {time_label(hour)}, and what needs action.")
-
-    banner = alert_banner(hour)
-    if banner:
-        html_block(banner)
-
-    pace = pace_at(hour)
-    counts = {s: sum(1 for p in pace if p["status"] == s) for s in STATUS}
-    html_block(
-        heading("This month so far", "units sold / monthly target")
-        + '<div class="cp-counts">'
-        + f'<span class="cp-count">{pill("behind")} {counts["behind"]}</span>'
-        + f'<span class="cp-count">{pill("drifting")} {counts["drifting"]}</span>'
-        + f'<span class="cp-count">{pill("on_pace")} {counts["on_pace"] + counts["ahead"]}</span>'
-        + (f'<span class="cp-count">{pill("too_early")} {counts["too_early"]}</span>'
-           if counts["too_early"] else "")
-        + "</div>"
-    )
-
-    attention = sorted((p for p in pace if p["status"] in ("behind", "drifting")),
-                       key=lambda p: (p["status"] != "behind", p["pct_vs_pace"]))
-    if attention:
-        html_block(heading("Needs attention") + grid(category_card(p) for p in attention))
-
-    html_block(heading("Today so far, by line", "units sold today / expected by now")
-               + grid(line_card(t) for t in today_at(hour)))
-
-
 def categories_page():
     hour = current_hour()
     page_title("Categories", "Every category's month-to-date pace. Being redesigned in step 3.")
@@ -159,7 +376,7 @@ def categories_page():
         html_block(heading(line, department) + grid(cards))
     html_block(heading("Pace by category", "worst first"))
     # theme=None so Streamlit's default chart styling (gridlines etc.) doesn't override ours.
-    st.altair_chart(pace_chart(pace), use_container_width=True, theme=None)
+    st.altair_chart(pace_chart(pace), width="stretch", theme=None)
 
 
 def coming_soon_page(title, what):
@@ -193,10 +410,9 @@ def chat_dialog():
     hour = current_hour()
     st.session_state.setdefault("chat", [])
     st.session_state.setdefault("questions_asked", 0)
-    left = DEMO_QUESTION_LIMIT - st.session_state["questions_asked"]
 
-    st.caption(f"Answers are built from the store's own numbers as of {time_label(hour)}. "
-               f"AI: {agent.PROVIDER['name']} · {max(left, 0)} of {DEMO_QUESTION_LIMIT} questions left.")
+    # Filled in at the end, so the "questions left" count includes this answer.
+    status_line = st.empty()
     st.pills("Suggested questions", list(SUGGESTED_QUESTIONS), key="chat_chip",
              on_change=_queue_suggestion, label_visibility="collapsed")
 
@@ -217,13 +433,21 @@ def chat_dialog():
                         "answer": (f"This demo allows {DEMO_QUESTION_LIMIT} questions per visit, and "
                                    f"they've been used. Everything else on the site still works.")}
             else:
-                st.markdown(f'<div class="cp-you">{esc(question)}</div>', unsafe_allow_html=True)
-                with st.spinner("Checking the numbers..."):
-                    answer, calls = agent.ask(question, current_hour=hour)
+                # Show the question with a spinner while the AI works, then swap in the answer.
+                waiting = st.empty()
+                with waiting.container():
+                    st.markdown(f'<div class="cp-you">{esc(question)}</div>', unsafe_allow_html=True)
+                    with st.spinner("Checking the numbers..."):
+                        answer, calls = agent.ask(question, current_hour=hour)
+                waiting.empty()
                 st.session_state["questions_asked"] += 1
                 turn = {"question": question, "answer": answer, "calls": calls}
             st.session_state["chat"].append(turn)
-            st.rerun(scope="fragment")
+            _render_turn(turn)
+
+    left = max(DEMO_QUESTION_LIMIT - st.session_state["questions_asked"], 0)
+    status_line.caption(f"Answers are built from the store's own numbers as of {time_label(hour)}. "
+                        f"AI: {agent.PROVIDER['name']} · {left} of {DEMO_QUESTION_LIMIT} questions left.")
 
 
 def _render_turn(turn):

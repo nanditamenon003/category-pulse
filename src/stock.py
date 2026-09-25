@@ -334,8 +334,10 @@ def get_days_of_cover(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, stock_
             "units_remaining": units,
             "avg_units_sold_per_day_last_7_days": round(rate, 1),
             "projected_days_of_cover": round(cover, 1) if cover is not None else None,
+            # Only sizes that still have stock can "run out"; empty ones already have.
             "likely_out_before_next_delivery": (
-                cover is not None and days_to_delivery is not None and cover < days_to_delivery
+                units > 0 and cover is not None and days_to_delivery is not None
+                and cover < days_to_delivery
             ),
         })
 
