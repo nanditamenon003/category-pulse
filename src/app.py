@@ -265,7 +265,9 @@ def pace_chart(pace):
         text=alt.Text("Percent of expected:Q", format=".0f"), color=alt.value("#1A1A1A"))
     rule = alt.Chart(pd.DataFrame({"x": [100]})).mark_rule(color="#1A1A1A").encode(x="x:Q")
 
-    return (bars + labels + rule).properties(height=22 * len(df)).configure_view(
+    return (bars + labels + rule).properties(
+        height=22 * len(df), padding={"left": 40, "right": 12, "top": 4, "bottom": 4}
+    ).configure_view(
         stroke=None, strokeWidth=0
     ).configure_axis(
         grid=False, labelFont="Inter", titleFont="Inter", labelFontSize=11, titleFontSize=11,

@@ -1,11 +1,15 @@
 """
-Category Pulse's AI agent: a Claude-powered retail floor assistant.
+Category Pulse's AI agent: a retail floor assistant that answers questions by
+calling tools (function calling) that read the store's own numbers.
 
-This is the centerpiece of the project. It uses Claude's tool use (function
-calling) to ground every answer in real numbers pulled from the simulated
-data — the agent never estimates or invents a figure. When a category is
-behind pace, it is expected to investigate (stock, footfall, conversion)
-before answering, the same way a good analyst would.
+It never estimates or invents a figure: every number in an answer comes from
+a tool result, and the "How I got this" trace in the app shows which. When a
+category is behind, it investigates (stock, deliveries, visitors, buying)
+before answering, the way a good analyst would.
+
+The provider is one setting in config.py (AI_PROVIDER). The code uses the
+Anthropic Messages API; DeepSeek's Anthropic-compatible endpoint runs the
+same code unchanged.
 """
 
 import json
@@ -15,222 +19,222 @@ from dotenv import load_dotenv
 
 import kpi
 import loyalty
+import staffing
 import stock
-from config import CATEGORIES, CLAUDE_MAX_TOKENS, CLAUDE_MODEL, DEFAULT_CURRENT_HOUR, MAX_TOOL_ITERATIONS
+from config import (
+    AI_MAX_TOKENS,
+    AI_PROVIDER,
+    AI_PROVIDERS,
+    CATEGORIES,
+    DAYS_IN_MONTH,
+    DEFAULT_CURRENT_HOUR,
+    DEPARTMENTS,
+    LINES,
+    MAX_TOOL_ITERATIONS,
+    TODAY_DAY,
+)
 
 load_dotenv()
+
+PROVIDER = AI_PROVIDERS[AI_PROVIDER]
 
 
 class AgentError(Exception):
     """Raised for problems the app should show as a friendly message, not a traceback."""
 
 
-SYSTEM_PROMPT = """You are the Category Pulse floor assistant: an internal tool for store \
-managers and sales associates in a single clothing store. You are not a shopping assistant \
-and you never talk to customers directly.
+def build_system_prompt(current_hour):
+    now = "20:00, closing time" if current_hour == 19 else f"{current_hour + 1}:00"
+    return f"""You are Category Pulse, an internal assistant for the manager and sales associates \
+of a single clothing store. You help the floor team act on category performance. You never talk \
+to customers. All data is simulated for this prototype.
 
-Ground rules:
-- Always call a tool to get real numbers before answering a question about sales, stock, \
-traffic, or performance. Never estimate, round from memory, or invent a figure. If a tool \
-call fails or a tool says data isn't available yet, say so plainly instead of guessing.
-- When a category is behind pace, investigate before you answer: check its stock status and \
-footfall (and conversion metrics, once available) to find the likely cause, rather than just \
-reporting the pace number.
-- Distinguish a traffic problem (footfall itself is low) from a conversion problem (footfall \
-is normal but sales still collapsed — usually a stock, sizing, pricing, or service issue).
-- Always end a diagnosis with one concrete, specific recommended action a manager or \
-associate could actually do on the floor today.
-- Be concise. A manager is reading this between customers, not studying a report. Prefer a \
-short paragraph over a wall of text, and plain language over analyst jargon.
-- Loyalty/cross-sell recommendations are segment-level only (by tier: Silver, Gold, \
-Platinum, Non-member). Never reason about or reference individual customers — that is a \
-deliberate privacy boundary for this tool, not a missing feature.
-"""
+Where things stand: it is day {TODAY_DAY} of a {DAYS_IN_MONTH}-day month, and the time now is \
+{now}. Tools only return data up to now. In tool results, "hour": 16 means the 16:00-17:00 \
+selling hour, so data "as of hour 16" runs to 17:00; when you mention the time, say {now}.
+
+How the store is organised:
+- Departments (floor zones): Menswear, Womenswear, Kidswear.
+- Lines: THM = Tommy Hilfiger Menswear, THT = Tailored (formal wear), TJM = Tommy Jeans Men, \
+Womens, and kids lines BB (big boys), BG (big girls), LB (little boys), LG (little girls).
+- A category is "<line> <product type>", e.g. "Womens Knit Top". Everyday names: "chinos" means \
+THM Non Denim Bottom; "jeans" means Denim Bottom (TJM Denim Bottom for men); "formal wear" means \
+the THT line; "polos" means THM Polo; "womenswear" means the Womens line; "kidswear" means \
+BB/BG/LB/LG.
+- Targets are monthly. Pace is month-to-date: units sold so far vs what the target implies by \
+now. Statuses: behind; drifting (slipping, but could still be normal ups and downs); on_pace; \
+ahead; too_early (too few units expected to judge).
+
+Rules:
+1. Get every number from a tool before answering. Never estimate, recall or invent a figure. If \
+a tool fails or has no data, say so plainly instead of guessing.
+2. Keep actual numbers separate from projections, and label projections as such ("if the \
+current rate continues...").
+3. When a category is behind or drifting, investigate before answering: check its stock health \
+(check_size_runs), its deliveries (get_stock_history), and visitors vs buyers \
+(get_conversion_metrics). Name the cause: a stockout; a broken size run (core sizes gone while \
+the shelf still looks full, which is different from a stockout); a traffic problem (fewer \
+visitors); a conversion problem (normal visitors, fewer buying); or no clear cause. Don't \
+overstate weak evidence such as "drifting", "possible_dip" or "too_few_sales_to_judge".
+4. End every diagnosis with one concrete action the team can take on the floor today or \
+tomorrow.
+5. Cross-selling and loyalty targeting are at tier level only (Platinum, Gold, Silver, \
+Non-member). Never reason about or refer to individual customers: that is a deliberate privacy \
+choice, not a missing feature. When suggesting a cross-sell, name the tier and the offer, and \
+phrase it as something an associate can say or do at the till.
+6. For staffing, use get_staffing_recommendation and say which past days it is based on.
+7. Be brief: a manager reads this between customers. Plain language, short paragraphs or a few \
+bullets, no tables, no emoji, no analyst jargon (say "share of visitors who bought" rather than \
+"conversion rate"). Refer to shoppers neutrally ("the shopper", "they").
+8. Each question is answered on its own, without memory of earlier ones, so don't end with a \
+question or an offer to do more."""
+
+
+def _category(description="Category id, e.g. 'Womens Knit Top'."):
+    return {"type": "string", "enum": CATEGORIES, "description": description}
+
+
+_LINE = {"type": "string", "enum": list(LINES), "description": "Line code, e.g. 'THM' or 'Womens'."}
+_ZONE = {"type": "string", "enum": DEPARTMENTS, "description": "Floor zone."}
+_HOUR = {"type": "integer", "description": "Store hour slot (10-19). Omit for now."}
+
+
+def _tool(name, description, properties=None, required=None):
+    return {
+        "name": name,
+        "description": description,
+        "input_schema": {
+            "type": "object",
+            "properties": properties or {},
+            "required": required or [],
+        },
+    }
+
 
 TOOLS = [
-    {
-        "name": "get_category_pace",
-        "description": (
-            "Get pace/status (units sold so far vs. the expected pace for this point in "
-            "the day) for one category or all categories. Status is 'behind', 'on_pace', "
-            "'ahead', or 'too_early' (too few units expected so far for the percentage "
-            "to mean anything — don't call a 'too_early' category behind or ahead). "
-            "Use this first to see which categories need attention."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "category": {
-                    "type": "string",
-                    "enum": CATEGORIES,
-                    "description": "Limit to one category. Omit to get all categories.",
-                },
-                "hour": {
-                    "type": "integer",
-                    "description": (
-                        "Store hour in 24h time (10-19) to evaluate pace as of. Omit to "
-                        "use the current simulated hour."
-                    ),
-                },
-            },
-            "required": [],
-        },
-    },
-    {
-        "name": "get_stock_status",
-        "description": (
-            "Get remaining stock by size for a category, as of right now, including which "
-            "sizes (if any) are completely out. Use this to check whether a stockout is "
-            "behind a category falling behind."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "category": {"type": "string", "enum": CATEGORIES},
-            },
-            "required": ["category"],
-        },
-    },
-    {
-        "name": "get_footfall",
-        "description": (
-            "Get total visitor counts (foot traffic) for a category so far today. Compare "
-            "against sales/pace to tell a traffic problem (low footfall) apart from a "
-            "conversion problem (normal footfall, but sales still collapsed)."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "category": {"type": "string", "enum": CATEGORIES},
-                "hour": {
-                    "type": "integer",
-                    "description": "Store hour (10-19) to total visitors through. Omit for the current simulated hour.",
-                },
-            },
-            "required": ["category"],
-        },
-    },
-    {
-        "name": "get_conversion_metrics",
-        "description": (
-            "Get conversion rate (% of visitors who bought) and units-per-transaction (UPT) "
-            "for a category. Not yet available in this build (Phase 6d)."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "category": {"type": "string", "enum": CATEGORIES},
-                "hour": {"type": "integer"},
-            },
-            "required": ["category"],
-        },
-    },
-    {
-        "name": "check_size_runs",
-        "description": (
-            "Check whether a category has a 'broken size run': core sizes (M, L) depleted "
-            "even though total remaining stock still looks adequate. This is a distinct "
-            "cause from a plain stockout. Not yet available in this build (Phase 6e)."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "category": {"type": "string", "enum": CATEGORIES},
-            },
-            "required": ["category"],
-        },
-    },
-    {
-        "name": "get_tier_playbook",
-        "description": (
-            "Get loyalty-tier (Silver/Gold/Platinum/Non-member) cross-sell response "
-            "profiles for a category, to target a cross-sell recommendation at the tier "
-            "most likely to respond. Not yet available in this build (Phase 6f)."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "category": {"type": "string", "enum": CATEGORIES},
-            },
-            "required": ["category"],
-        },
-    },
+    _tool("get_category_pace",
+          "Month-to-date pace for all categories, or one category or line: units sold, expected by "
+          "now, % vs pace, status, units per day needed vs actual, and a labelled month-end "
+          "projection. Start here to see what needs attention.",
+          {"category": _category(), "line": _LINE, "hour": _HOUR}),
+    _tool("get_today_pace",
+          "Today's sales so far vs what a typical day would have sold by now, per line.",
+          {"line": _LINE, "hour": _HOUR}),
+    _tool("get_contribution",
+          "Month-to-date units and value by line and category, each as a share of the store "
+          "(the store's contribution report).",
+          {"hour": _HOUR}),
+    _tool("get_stock_health_report",
+          "Every category whose stock isn't healthy right now: stockouts, broken size runs, "
+          "running out. Use for 'is anything low on stock?'."),
+    _tool("check_size_runs",
+          "Stock health verdict for one category: stockout, broken_size_run (core sizes gone "
+          "while total stock still looks fine), running_out, or healthy, with the numbers.",
+          {"category": _category()}, ["category"]),
+    _tool("get_stock_status",
+          "Units left by size for one category right now, which sizes are out, and the core sizes.",
+          {"category": _category()}, ["category"]),
+    _tool("get_stock_history",
+          "One category's recent stock by day, every delivery received this month with the sizes "
+          "in it, and scheduled deliveries that never arrived. Use to find the cause of a stock "
+          "problem.",
+          {"category": _category()}, ["category"]),
+    _tool("get_last_piece_alerts",
+          "Sizes that dropped to their last unit today, with the hour and whether it is a core size."),
+    _tool("get_days_of_cover",
+          "Projection of how many days each size of a category will last at its recent selling "
+          "rate, and which are likely to run out before the next delivery.",
+          {"category": _category()}, ["category"]),
+    _tool("get_footfall",
+          "Visitors to a floor zone today so far vs a typical day of the same kind, plus the last "
+          "7 days. Give a zone, or a category or line to use its zone.",
+          {"zone": _ZONE, "category": _category(), "line": _LINE, "hour": _HOUR}),
+    _tool("get_conversion_metrics",
+          "Visitors vs buyers for a category, line or zone: share of visitors who bought, units "
+          "per transaction, and a reading of whether a slowdown is a traffic problem, a conversion "
+          "problem, a possible dip, or too small to judge. Its 'recent' window is the last 3 days "
+          "plus today (not 7 days), compared with the first half of the month.",
+          {"category": _category(), "line": _LINE, "zone": _ZONE}),
+    _tool("get_staffing_recommendation",
+          "Tomorrow's peak hours per floor zone from past days of the same kind, a suggested floor "
+          "team split at the busiest hour, the days it's based on, and delivery-day notes."),
+    _tool("get_cross_sell_ideas",
+          "Cross-sell ideas for categories behind pace, adapted to the cause (substitute for a "
+          "stockout, available sizes for a broken size run, a complementary pairing otherwise), "
+          "each naming a loyalty tier and offer, with any supply action."),
+    _tool("get_tier_playbook",
+          "Loyalty tiers for one category ranked by cross-sell response, with each tier's "
+          "preferred offer phrased for the till. Tier-level data only.",
+          {"category": _category()}, ["category"]),
 ]
 
 
 def _build_tool_dispatch(current_hour):
     """
-    Builds the name -> function map used to execute Claude's tool calls.
-    Tools whose public signature (per the spec) doesn't take an hour default
-    to `current_hour`, the "right now" of the simulated day, but still
-    accept an explicit hour from Claude when the tool schema offers one.
+    Maps tool names to functions. Every tool works on today (TODAY_DAY) and
+    never sees past `current_hour`: an hour the model asks for is capped at
+    now, so the agent can't read sales that haven't happened yet.
     """
+    def at(hour):
+        return current_hour if hour is None else min(int(hour), current_hour)
 
-    def impl_get_category_pace(category=None, hour=None):
-        h = hour if hour is not None else current_hour
-        return kpi.get_category_pace(hour=h, category=category)
-
-    def impl_get_stock_status(category):
-        return stock.get_stock_status(category, hour=current_hour)
-
-    def impl_get_footfall(category, hour=None):
-        h = hour if hour is not None else current_hour
-        return kpi.get_footfall(category=category, hour=h)
-
-    def impl_get_conversion_metrics(category, hour=None):
-        h = hour if hour is not None else current_hour
-        return kpi.get_conversion_metrics(category=category, hour=h)
-
-    def impl_check_size_runs(category):
-        return stock.check_size_runs(category, hour=current_hour)
-
-    def impl_get_tier_playbook(category):
-        return loyalty.get_tier_playbook(category)
-
+    day = TODAY_DAY
     return {
-        "get_category_pace": impl_get_category_pace,
-        "get_stock_status": impl_get_stock_status,
-        "get_footfall": impl_get_footfall,
-        "get_conversion_metrics": impl_get_conversion_metrics,
-        "check_size_runs": impl_check_size_runs,
-        "get_tier_playbook": impl_get_tier_playbook,
+        "get_category_pace": lambda category=None, line=None, hour=None:
+            kpi.get_category_pace(day, at(hour), category=category, line=line),
+        "get_today_pace": lambda line=None, hour=None:
+            kpi.get_today_pace(line=line, day=day, hour=at(hour)),
+        "get_contribution": lambda hour=None: kpi.get_contribution(day, at(hour)),
+        "get_stock_health_report": lambda: stock.get_stock_health_report(day, current_hour),
+        "check_size_runs": lambda category: stock.check_size_runs(category, day, current_hour),
+        "get_stock_status": lambda category: stock.get_stock_status(category, day, current_hour),
+        "get_stock_history": lambda category: stock.get_stock_history(category, day, current_hour),
+        "get_last_piece_alerts": lambda: stock.get_last_piece_alerts(day, current_hour),
+        "get_days_of_cover": lambda category: stock.get_days_of_cover(category, day, current_hour),
+        "get_footfall": lambda zone=None, category=None, line=None, hour=None:
+            kpi.get_footfall(zone=zone, category=category, line=line, day=day, hour=at(hour)),
+        "get_conversion_metrics": lambda category=None, line=None, zone=None:
+            kpi.get_conversion_metrics(category=category, line=line, zone=zone,
+                                       day=day, hour=current_hour),
+        "get_staffing_recommendation": lambda: staffing.get_staffing_recommendation(day + 1),
+        "get_cross_sell_ideas": lambda: loyalty.get_cross_sell_ideas(day, current_hour),
+        "get_tier_playbook": lambda category: loyalty.get_tier_playbook(category),
     }
 
 
 def get_client():
     """
-    Builds the Anthropic client, reading the API key from the environment
-    (never hardcoded). Raises AgentError with a friendly message if the key
-    is missing, so callers can show that instead of crashing.
+    Builds the API client for the configured provider, reading its key from
+    the environment (never hardcoded). Raises AgentError with a friendly
+    message if the key is missing.
     """
-    # Imported lazily so a missing `anthropic` package still lets the rest
-    # of the app (data generation, KPI engine) run without it installed.
+    # Imported lazily so the rest of the app runs even without the package.
     from anthropic import Anthropic
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    api_key = (os.environ.get(PROVIDER["key_env"]) or "").strip()
     if not api_key:
         raise AgentError(
-            "No ANTHROPIC_API_KEY found. Copy .env.example to .env and add your "
-            "Anthropic API key, then try again."
+            f"No {PROVIDER['key_env']} found. Add your {PROVIDER['name']} API key to the .env "
+            f"file (see .env.example), then restart the app."
         )
+    if PROVIDER["base_url"]:
+        return Anthropic(api_key=api_key, base_url=PROVIDER["base_url"])
     return Anthropic(api_key=api_key)
 
 
 def ask(question, current_hour=DEFAULT_CURRENT_HOUR, client=None):
     """
-    Sends a question to Claude with tool use enabled, runs the tool-call
-    loop until Claude has a final answer, and returns (answer_text,
-    tool_call_log). tool_call_log is a list of {"tool", "input", "result"}
-    dicts, in call order — used for the "How I got this" trace in Phase 7.
+    Sends a question to the model with tools enabled, runs the tool-call loop
+    until it has a final answer, and returns (answer_text, tool_call_log).
+    tool_call_log lists {"tool", "input", "result"} in call order, for the
+    app's "How I got this" trace.
 
-    Never raises for ordinary failure modes (missing key, API error): those
-    come back as a friendly string answer with an empty tool_call_log, per
-    the spec's "never crash with a raw traceback" requirement.
+    Never raises for ordinary failures (missing key, no credit, network):
+    those come back as a friendly answer with an empty trace.
     """
     from anthropic import APIError
 
     tool_call_log = []
-
     try:
         if client is None:
             client = get_client()
@@ -238,106 +242,94 @@ def ask(question, current_hour=DEFAULT_CURRENT_HOUR, client=None):
         return str(e), tool_call_log
 
     dispatch = _build_tool_dispatch(current_hour)
+    system = build_system_prompt(current_hour)
     messages = [{"role": "user", "content": question}]
 
-    try:
-        response = client.messages.create(
-            model=CLAUDE_MODEL,
-            max_tokens=CLAUDE_MAX_TOKENS,
-            system=SYSTEM_PROMPT,
+    def call_model():
+        return client.messages.create(
+            model=PROVIDER["model"],
+            max_tokens=AI_MAX_TOKENS,
+            system=system,
             tools=TOOLS,
             messages=messages,
         )
 
-        iterations = 0
-        while response.stop_reason == "tool_use" and iterations < MAX_TOOL_ITERATIONS:
-            iterations += 1
-            tool_use_blocks = [b for b in response.content if b.type == "tool_use"]
+    try:
+        response = call_model()
+        rounds = 0
+        while response.stop_reason == "tool_use" and rounds < MAX_TOOL_ITERATIONS:
+            rounds += 1
             messages.append({"role": "assistant", "content": response.content})
 
             tool_results = []
-            for block in tool_use_blocks:
+            for block in (b for b in response.content if b.type == "tool_use"):
                 try:
-                    result = dispatch[block.name](**block.input)
+                    result = dispatch[block.name](**(block.input or {}))
                 except Exception as e:  # a bad tool call shouldn't crash the app
                     result = {"error": f"Tool call failed: {e}"}
+                tool_call_log.append({"tool": block.name, "input": block.input, "result": result})
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result, default=str),
+                })
 
-                tool_call_log.append(
-                    {"tool": block.name, "input": block.input, "result": result}
-                )
-                tool_results.append(
-                    {
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": json.dumps(result, default=str),
-                    }
-                )
-
+            # All results from one round go back together in a single message.
             messages.append({"role": "user", "content": tool_results})
-            response = client.messages.create(
-                model=CLAUDE_MODEL,
-                max_tokens=CLAUDE_MAX_TOKENS,
-                system=SYSTEM_PROMPT,
-                tools=TOOLS,
-                messages=messages,
-            )
+            response = call_model()
 
-        answer = "".join(
-            block.text for block in response.content if block.type == "text"
-        ).strip()
+        answer = "".join(b.text for b in response.content if b.type == "text").strip()
+        if response.stop_reason == "tool_use":
+            answer = (answer + "\n\n" if answer else "") + (
+                "I ran out of lookups before finishing. Try asking a narrower question.")
         if not answer:
-            answer = "I wasn't able to reach a final answer for that — try rephrasing the question."
+            answer = "I wasn't able to reach a final answer for that. Try rephrasing the question."
         return answer, tool_call_log
 
     except APIError as e:
         return _friendly_api_error(e), tool_call_log
     except Exception as e:
-        return f"Something went wrong talking to Claude: {e}", tool_call_log
+        return f"Something went wrong talking to {PROVIDER['name']}: {e}", tool_call_log
 
 
 def _friendly_api_error(error):
     """Turns common API failures into a plain instruction instead of a raw error dump."""
     import anthropic
 
+    name, console = PROVIDER["name"], PROVIDER["console"]
+    status = getattr(error, "status_code", None)
     if isinstance(error, anthropic.AuthenticationError):
-        return ("The API key in the .env file isn't being accepted. Check it was copied in full "
-                "from console.anthropic.com, then restart the app.")
-    if isinstance(error, anthropic.BadRequestError) and "credit balance" in str(error).lower():
-        return ("The AI chat needs API credits. Add a few dollars at console.anthropic.com "
-                "(Plans & Billing), then ask again. Everything else on this page works without it.")
+        return (f"The {name} API key in the .env file isn't being accepted. Check it was copied in "
+                f"full from {console}, then restart the app.")
+    if status == 402 or "credit balance" in str(error).lower() or "insufficient" in str(error).lower():
+        return (f"The AI chat is out of {name} credit. Top up at {console}, then ask again. "
+                f"Everything else on this page works without it.")
     if isinstance(error, anthropic.RateLimitError):
         return "Too many questions in a short time. Wait a minute and try again."
     if isinstance(error, anthropic.APIConnectionError):
-        return "Couldn't reach Claude. Check the internet connection and try again."
-    return f"The Claude API returned an error, so no answer this time. Details: {error}"
+        return f"Couldn't reach {name}. Check the internet connection and try again."
+    return f"The {name} API returned an error, so no answer this time. Details: {error}"
 
 
 def _terminal_loop():
-    print("Category Pulse agent (Phase 4 terminal interface)")
-    print(f"Simulated 'current' store hour: {DEFAULT_CURRENT_HOUR}:00")
-    print("Type a question, or 'quit' to exit.\n")
-
+    print(f"Category Pulse agent ({PROVIDER['name']}, model {PROVIDER['model']})")
+    print(f"Day {TODAY_DAY}, simulated time {DEFAULT_CURRENT_HOUR + 1}:00. Type 'quit' to exit.\n")
     while True:
         try:
             question = input("You: ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             break
-
         if not question:
             continue
         if question.lower() in {"quit", "exit"}:
             break
-
         answer, tool_calls = ask(question)
-
         if tool_calls:
             print("\n[tools called]")
             for call in tool_calls:
-                print(f"  - {call['tool']}({call['input']}) -> {call['result']}")
-            print()
-
-        print(f"Agent: {answer}\n")
+                print(f"  - {call['tool']}({call['input']})")
+        print(f"\nAgent: {answer}\n")
 
 
 if __name__ == "__main__":

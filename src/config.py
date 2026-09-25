@@ -333,14 +333,35 @@ BROKEN_RUN_MIN_SHARE = 0.30
 CORE_DEPLETED_MAX_UNITS = 1
 
 # --- AI agent (Phase 4) -----------------------------------------------------------------
-# Model name kept in one place so it can be swapped without touching agent
-# code. Use a current Claude Sonnet model.
-CLAUDE_MODEL = "claude-sonnet-5"
-CLAUDE_MAX_TOKENS = 1024
+# Which AI provider the chat uses: change this one line to switch. The agent
+# is written against Anthropic's Messages API; DeepSeek offers an
+# Anthropic-compatible endpoint, so the same code runs on either.
+#   - "anthropic": Claude, as the spec specifies (needs Anthropic API credits)
+#   - "deepseek": a low-cost option for the prototype. Fine for simulated
+#     data; a real-data pilot should use a provider the company approves.
+AI_PROVIDER = "deepseek"
+
+AI_PROVIDERS = {
+    "anthropic": {
+        "name": "Claude",
+        "model": "claude-sonnet-5",
+        "base_url": None,  # the Anthropic SDK's default
+        "key_env": "ANTHROPIC_API_KEY",
+        "console": "console.anthropic.com",
+    },
+    "deepseek": {
+        "name": "DeepSeek",
+        "model": "deepseek-flash",
+        "base_url": "https://api.deepseek.com/anthropic",
+        "key_env": "DEEPSEEK_API_KEY",
+        "console": "platform.deepseek.com",
+    },
+}
+AI_MAX_TOKENS = 1500
 
 # Safety cap on how many rounds of tool calls the agent can make while
 # answering a single question, so a confused loop can't run forever.
-MAX_TOOL_ITERATIONS = 6
+MAX_TOOL_ITERATIONS = 8
 
 # The simulated "right now" when a tool isn't given an explicit hour:
 # 16:00 on day 24 — mid-afternoon, with time left today to act.
