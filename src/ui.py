@@ -168,6 +168,18 @@ header[data-testid="stHeader"] {{ background: {PAGE}; border-bottom: 1px solid {
 [class*="st-key-click_cat_"] .cp-card {{ height: 100%; }}
 .cp-showing {{ font-size: 13px; color: {MUTED}; margin: 6px 0 4px; }}
 
+/* Guided tour card */
+.cp-tour {{ background: {CARD}; border: 2px solid {ACCENT}; border-radius: 8px; padding: 12px 16px; }}
+.cp-tour-step {{ font-size: 12px; font-weight: 700; color: {ACCENT}; text-transform: uppercase;
+                letter-spacing: 0.04em; }}
+.cp-tour-title {{ font-size: 16px; font-weight: 700; color: {TEXT}; margin: 2px 0 4px; }}
+.cp-tour-text {{ font-size: 14px; color: {TEXT}; line-height: 1.55; }}
+.st-key-tour_card {{ margin-bottom: 8px; }}
+
+/* Guide page */
+.cp-term {{ font-size: 14px; color: {TEXT}; margin: 6px 0; line-height: 1.55; }}
+.cp-term b {{ font-weight: 700; }}
+
 /* The end-of-day summary, set for easy reading. */
 .cp-digest {{ background: {CARD}; border: 1px solid {BORDER}; border-radius: 8px; padding: 18px 22px;
              max-width: 760px; }}

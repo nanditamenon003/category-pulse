@@ -16,6 +16,9 @@
 | **Floor and staff** | Visitors and buyers per floor zone, and tomorrow's peak hours and floor split |
 | **Sell** | Cross-sell scripts for the till, and what each loyalty tier responds to |
 | **Summary** | The end-of-day summary and the month's contribution report, both downloadable |
+| **Guide** | What each status and term means in plain English, how the AI chat works, and a button to start the tour |
+
+- **Guided tour:** "Take the tour" (on Today or the Guide) walks through the site in seven stops. It moves between pages by itself and outlines what to look at on each one.
 
 - **Category detail:** tap any category for a pop-up with four tabs: *Why*, *Stock by size*, *Shoppers* and *Sell*.
 - **Chat:** the **Ask Category Pulse** button (bottom right, on every page) opens the AI chat.

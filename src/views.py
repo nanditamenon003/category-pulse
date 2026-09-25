@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 import agent
+import tour
 from config import CATEGORIES, DEMO_QUESTION_LIMIT, LINES, STORE_HOURS, TODAY_DAY, month_calendar
 from ui import (
     AMBER,
@@ -77,20 +78,25 @@ STOCK_VERDICT = {
 # --- Today ---------------------------------------------------------------------------------
 
 def _start_here():
-    if st.session_state.get("hide_start_here"):
+    # Hidden once dismissed, and while the tour runs (the tour card does its job).
+    if st.session_state.get("hide_start_here") or st.session_state.get("tour_step") is not None:
         return
     html_block(
         '<div class="cp-panel"><div class="cp-panel-title">Start here</div>'
         f'<p>This is a demo store with simulated data, shown on day {TODAY_DAY} of a 31-day May. '
         'The sales, stock and visitors are made up but behave like a real store, and a few real '
         'problems are hidden in the numbers.</p>'
-        '<p><b>Try this:</b> tap <b>THM Non Denim Bottom</b> below to see why it\'s behind, '
-        'open <b>Ask Category Pulse</b> (bottom right) to question the data, or use the time '
-        'button (top right) to rewind the day.</p></div>'
+        '<p><b>New here?</b> Take the 2-minute tour, or explore on your own: tap '
+        '<b>THM Non Denim Bottom</b> below to see why it\'s behind, open <b>Ask Category Pulse</b> '
+        '(bottom right) to question the data, or use the time button (top right) to rewind the '
+        'day.</p></div>'
     )
-    if st.button("Got it, hide this", key="hide_start_btn", type="tertiary"):
-        st.session_state["hide_start_here"] = True
-        st.rerun()
+    with st.container(horizontal=True, gap="small", vertical_alignment="center"):
+        if st.button("Take the tour", key="start_tour", icon=":material/tour:"):
+            tour.start()
+        if st.button("Got it, hide this", key="hide_start_btn", type="tertiary"):
+            st.session_state["hide_start_here"] = True
+            st.rerun()
 
 
 def _problem_row(p, diag):
@@ -745,6 +751,74 @@ def summary_page():
                        data=pd.DataFrame(categories).to_csv(index=False),
                        file_name=f"category-pulse-contribution-day{TODAY_DAY}-{moment}.csv",
                        mime="text/csv")
+
+
+# --- Guide page ------------------------------------------------------------------------------
+
+GUIDE_STATUSES = [
+    ("behind", "More than 15% under where it should be by now, by more than normal day-to-day "
+               "ups and downs. Needs action."),
+    ("drifting", "More than 15% under, but small enough that it could still be chance. Worth "
+                 "watching, not yet proven."),
+    ("on_pace", "Within 15% of where it should be."),
+    ("ahead", "More than 15% over, by more than chance."),
+    ("too_early", "Too few units expected so far for a percentage to mean anything."),
+]
+
+GUIDE_TERMS = [
+    ("Pace", "Units sold so far compared with what the monthly target says should have sold by "
+             "now. Month-to-date, because targets are monthly."),
+    ("Needs per day", "How many units a day the category must sell from now on to hit its "
+                      "target, next to what it's actually selling."),
+    ("Month-end at this rate", "A projection, not a result: where the month lands if the current "
+                               "daily rate simply continues. It can't know about stockouts or a "
+                               "month-end push."),
+    ("Core sizes", "The sizes most shoppers need, such as M and L in men's tops or waists 32 and "
+                   "34 in men's bottoms."),
+    ("Stockout", "Almost nothing left to sell in any size."),
+    ("Broken size run", "The shelf still looks full, but the core sizes are gone, so most "
+                        "shoppers can't find their size. The category total hides it."),
+    ("Last piece", "A size that has just dropped to its final unit. Flagged the moment it "
+                   "happens."),
+    ("Visitors vs buyers", "Fewer visitors means a traffic problem (displays, marketing). Normal "
+                           "visitors but fewer buyers means a conversion problem (stock, sizes, "
+                           "price or service)."),
+    ("Loyalty tiers", "Platinum, Gold, Silver and non-members. Cross-sell ideas target a tier and "
+                      "the offer it responds to, never an individual customer."),
+    ("Contribution", "Each line's and category's share of the store's units and value "
+                     "month-to-date. The report checks its own totals."),
+]
+
+
+def guide_page():
+    page_title("Guide", "How to read Category Pulse, in plain English.")
+    if st.button("Start the guided tour", key="guide_tour", icon=":material/tour:"):
+        tour.start()
+
+    html_block(heading("What this is")
+               + '<div class="cp-panel"><p>A demo of an assistant for a clothing store\'s floor '
+                 'team. It watches every category against its monthly target, finds what\'s '
+                 'genuinely behind, works out why, and suggests what to do while there\'s still '
+                 f'time. The store is simulated: it\'s day {TODAY_DAY} of a 31-day May, and every '
+                 'number is generated. No real store or customer data is used.</p></div>')
+
+    html_block(heading("What the statuses mean")
+               + '<div class="cp-panel">'
+               + "".join(f'<div class="cp-term">{pill(s)} {esc(text)}</div>' for s, text in GUIDE_STATUSES)
+               + "</div>")
+
+    html_block(heading("Key terms")
+               + '<div class="cp-panel">'
+               + "".join(f'<div class="cp-term"><b>{esc(term)}:</b> {esc(text)}</div>'
+                         for term, text in GUIDE_TERMS)
+               + "</div>")
+
+    html_block(heading("How the AI chat works")
+               + '<div class="cp-panel"><p>Ask Category Pulse answers by looking up the store\'s '
+                 'numbers with the same calculations the pages use, and never guesses a figure. '
+                 'Under each answer, "How I got this" lists every lookup and the numbers it '
+                 f'returned. It runs on {esc(agent.PROVIDER["name"])} and allows '
+                 f'{DEMO_QUESTION_LIMIT} questions per visit on this public demo.</p></div>')
 
 
 # --- Chat pop-up -----------------------------------------------------------------------------
