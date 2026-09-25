@@ -145,13 +145,15 @@ category-pulse/
 
 - **Every number comes from the data.** The AI must call tools before answering and may not estimate. Projections are always labelled as projections.
 - **Status before numbers.** Green, amber and red are used only for status, always with a word label (so it works for colour-blind users), plus one indigo accent colour for buttons. It's built to be read on a phone.
-- **Privacy by design.** Loyalty targeting works at tier level (Platinum, Gold, Silver, Non-member). No individual customer data exists anywhere in the project.
+- **Privacy by design.** Loyalty targeting works at tier level (Platinum, Gold, Silver, Non-member). No individual customer data exists anywhere in the project. Uploaded store data stays in the visitor's session and never goes to the AI.
+- **Honest about gaps.** Every feature says plainly when the data it needs is missing, rather than guessing.
 - **No machine-learning model (yet).** With one simulated store, a trained model would only re-learn the simulator's own rules. Simple, explainable projections are used instead. See the case study.
 
 ## Limitations
 
-- All data is simulated, for one store, at hourly granularity.
-- Footfall is simulated per floor zone; many real stores only count visitors at the door.
-- Size ranges are simplified, and projections are simple run-rates.
-- Each chat question is answered on its own (no conversation memory). Answers take roughly 5 to 30 seconds while the AI looks things up.
+- The demo store is simulated. Uploads work for any store, one month at a time, but the template is generic: a specific system's export may need its columns renamed to match.
+- Uploaded data is read as at the close of its latest day. Stock alerts are only as detailed as the stock counts supplied (a daily count gives "by today's close", not the hour).
+- When core sizes aren't given, they're learned from sales, which can pick the wrong sizes when sales are few. The upload page shows them so they can be checked and corrected in the template.
+- Projections are simple run-rates, clearly labelled.
+- The AI chat works on the demo store only. Each question is answered on its own (no conversation memory), and answers take roughly 5 to 30 seconds while the AI looks things up.
 - A real-data pilot would need the store's approval, and an AI provider the company approves.
