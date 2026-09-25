@@ -406,18 +406,33 @@ def _print_unplanned_stockouts(stock_df):
         print(f"  {category} size {size}: first on day {row['min']}, {row['count']} hours at zero")
 
 
-if __name__ == "__main__":
-    os.makedirs(DATA_DIR, exist_ok=True)
+DATA_FILES = ("sales", "stock", "footfall", "loyalty_tiers")
 
+
+def data_is_present(data_dir=DATA_DIR):
+    return all(os.path.exists(os.path.join(data_dir, f"{name}.csv")) for name in DATA_FILES)
+
+
+def generate_all(data_dir=DATA_DIR):
+    """Simulates the month and writes every data file. Returns the DataFrames by name."""
+    os.makedirs(data_dir, exist_ok=True)
     sales_df, stock_df = simulate_store()
-    footfall_df = generate_footfall()
-    loyalty_df = generate_loyalty_tiers()
+    frames = {
+        "sales": sales_df,
+        "stock": stock_df,
+        "footfall": generate_footfall(),
+        "loyalty_tiers": generate_loyalty_tiers(),
+    }
+    for name, df in frames.items():
+        df.to_csv(os.path.join(data_dir, f"{name}.csv"), index=False)
+    return frames
 
-    for name, df in (("sales", sales_df), ("stock", stock_df), ("footfall", footfall_df),
-                     ("loyalty_tiers", loyalty_df)):
-        path = os.path.join(DATA_DIR, f"{name}.csv")
-        df.to_csv(path, index=False)
+
+if __name__ == "__main__":
+    frames = generate_all()
+    for name, df in frames.items():
         print(f"Wrote {len(df):>6} rows to data/{name}.csv")
+    sales_df, stock_df, footfall_df = frames["sales"], frames["stock"], frames["footfall"]
 
     _print_target_sheet(sales_df)
     _print_daily_rhythm(sales_df)

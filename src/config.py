@@ -359,6 +359,11 @@ AI_PROVIDERS = {
 }
 AI_MAX_TOKENS = 1500
 
+# Questions each visitor can ask the chat per browser session. The public
+# demo runs on the owner's prepaid API credit, so this stops one visitor
+# from using it all up.
+DEMO_QUESTION_LIMIT = 10
+
 # Safety cap on how many rounds of tool calls the agent can make while
 # answering a single question, so a confused loop can't run forever.
 MAX_TOOL_ITERATIONS = 8

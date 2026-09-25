@@ -18,11 +18,13 @@ import streamlit as st
 import agent
 import diagnosis
 import digest
+import generate_data
 import kpi
 import stock
 from config import (
     CATEGORY_PRODUCT,
     DEFAULT_CURRENT_HOUR,
+    DEMO_QUESTION_LIMIT,
     LINES,
     STORE_HOURS,
     STORE_NAME,
@@ -117,8 +119,12 @@ CSS = f"""
 
 # --- Data (loaded once, computed once per hour) ------------------------------------
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner="Setting up the simulated store data (first start only)...")
 def load_data():
+    # The data files aren't stored in git: they regenerate identically from
+    # the fixed seed, so a fresh deployment builds them on first start.
+    if not generate_data.data_is_present():
+        generate_data.generate_all()
     return diagnosis.load_all()
 
 
@@ -277,8 +283,10 @@ def pace_chart(pace):
 
 def chat_section(hour):
     st.markdown(heading("Ask Category Pulse",
-                        "answers are built from the store's own numbers"), unsafe_allow_html=True)
+                        f"answers are built from the store's own numbers · AI: {agent.PROVIDER['name']}"),
+                unsafe_allow_html=True)
     st.session_state.setdefault("chat", [])
+    st.session_state.setdefault("questions_asked", 0)
 
     question = None
     for i, q in enumerate(SUGGESTED_QUESTIONS):
@@ -291,9 +299,17 @@ def chat_section(hour):
         if st.form_submit_button("Ask", type="primary") and typed.strip():
             question = typed.strip()
 
-    if question:
+    if question and st.session_state["questions_asked"] >= DEMO_QUESTION_LIMIT:
+        st.session_state["chat"].append({
+            "question": question,
+            "answer": (f"This demo allows {DEMO_QUESTION_LIMIT} questions per visit, and they've "
+                       f"been used. Everything else on the page still works."),
+            "calls": [],
+        })
+    elif question:
         with st.spinner("Checking the numbers..."):
             answer, calls = agent.ask(question, current_hour=hour)
+        st.session_state["questions_asked"] += 1
         st.session_state["chat"].append({"question": question, "answer": answer, "calls": calls})
 
     for turn in reversed(st.session_state["chat"]):
