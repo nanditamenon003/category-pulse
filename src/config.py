@@ -222,6 +222,33 @@ DEMAND_MULTIPLIER = {"LB Knit Top": 1.4}
 # "Jeans" (TJM Denim Bottom) and "Formal Wear" (THT Woven Top) have no
 # scenario: they track roughly on pace with normal variation.
 
+# --- Cross-selling (Phase 6c) ------------------------------------------------------
+# Which product types go together as an outfit (to pair a lagging category
+# with), and which can stand in for each other when one is sold out.
+# Adults can pair across lines on the same floor (e.g. THM chinos with a THT
+# shirt); kids pair only within the same line, since BB/BG/LB/LG are
+# different ages.
+COMPLEMENTS = {
+    "Non Denim Bottom": ["Woven Top", "Polo", "Knit Top", "Blazer"],
+    "Denim Bottom": ["T-shirt", "Knit Top", "Woven Top", "Polo"],
+    "Polo": ["Non Denim Bottom", "Denim Bottom"],
+    "T-shirt": ["Denim Bottom", "Non Denim Bottom"],
+    "Woven Top": ["Non Denim Bottom", "Blazer", "Denim Bottom"],
+    "Blazer": ["Woven Top", "Non Denim Bottom"],
+    "Knit Top": ["Denim Bottom", "Non Denim Bottom"],
+    "Dress": ["Woven Top", "Knit Top"],
+}
+SUBSTITUTES = {
+    "Knit Top": ["Woven Top", "T-shirt", "Polo"],
+    "Woven Top": ["Knit Top", "Polo"],
+    "Polo": ["T-shirt", "Knit Top", "Woven Top"],
+    "T-shirt": ["Polo", "Knit Top"],
+    "Non Denim Bottom": ["Denim Bottom"],
+    "Denim Bottom": ["Non Denim Bottom"],
+    "Dress": ["Woven Top", "Knit Top"],
+    "Blazer": ["Woven Top"],
+}
+
 # --- Reproducibility ---------------------------------------------------------------
 # Fixed random seed so the simulated data is identical every time it is
 # regenerated. A reproducible demo is essential for this project.

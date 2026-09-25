@@ -266,6 +266,81 @@ def generate_footfall():
     return pd.DataFrame(rows)
 
 
+# --- Loyalty tiers ----------------------------------------------------------------
+
+# Each tier's starting profile and the offer it responds to best. Platinum
+# members respond to service and exclusivity, Gold to value bundles, Silver
+# to earning points, and non-members to a first-purchase discount (which is
+# also the moment to sign them up).
+TIER_PROFILES = {
+    "Platinum": {"share": 8, "response": 18, "basket": 1.6, "upt": 1.40},
+    "Gold": {"share": 17, "response": 22, "basket": 1.3, "upt": 1.25},
+    "Silver": {"share": 25, "response": 15, "basket": 1.1, "upt": 1.10},
+    "Non-member": {"share": 50, "response": 10, "basket": 0.9, "upt": 0.95},
+}
+ALTERATION_PRODUCTS = {"Non Denim Bottom", "Denim Bottom", "Blazer", "Woven Top", "Dress"}
+
+
+def _tier_adjustments(category):
+    """How each tier's share and response shift for this kind of product."""
+    line, product = CATEGORY_LINE[category], CATEGORY_PRODUCT[category]
+    share = {t: 0 for t in TIER_PROFILES}
+    response = {t: 0 for t in TIER_PROFILES}
+    if line == "THT" or (line == "THM" and product in ("Blazer", "Non Denim Bottom")):
+        share["Platinum"] += 6          # tailoring draws the store's best customers
+        response["Platinum"] += 12      # a free alteration is hard to refuse
+    if "Bottom" in product:
+        response["Gold"] += 6           # outfit bundles land well on bottoms
+    if line == "Womens":
+        response["Silver"] += 9         # points multipliers drive womenswear repeat visits
+    if line == "TJM":
+        share["Non-member"] += 8
+        response["Non-member"] += 8     # younger, price-led shoppers
+    if line in ("BB", "BG", "LB", "LG"):
+        share["Non-member"] += 10
+        response["Non-member"] += 11    # parents and gift buyers, often first-timers
+        response["Silver"] += 4
+    return share, response
+
+
+def generate_loyalty_tiers():
+    """
+    One row per loyalty tier per category: segment-level aggregates only
+    (share of transactions, average basket, UPT, cross-sell response rate and
+    preferred offer). No individual customer appears anywhere, by design.
+    Uses its own random stream so it never shifts the sales simulation.
+    """
+    rng = np.random.default_rng(RANDOM_SEED + 2)
+    rows = []
+    for category in CATEGORIES:
+        share_adj, response_adj = _tier_adjustments(category)
+        raw_share = {t: p["share"] + share_adj[t] for t, p in TIER_PROFILES.items()}
+        total = sum(raw_share.values())
+        shares = {t: round(v / total * 100) for t, v in raw_share.items()}
+        shares["Non-member"] += 100 - sum(shares.values())  # keep the total at exactly 100
+
+        product = CATEGORY_PRODUCT[category]
+        for tier, profile in TIER_PROFILES.items():
+            upt = profile["upt"] * rng.uniform(0.95, 1.05)
+            if tier == "Platinum":
+                offer = "complimentary_service" if product in ALTERATION_PRODUCTS else "early_access"
+            else:
+                offer = {"Gold": "bundle", "Silver": "loyalty_points_multiplier",
+                         "Non-member": "percentage_discount"}[tier]
+            rows.append({
+                "tier": tier,
+                "category": category,
+                "share_of_transactions": shares[tier],
+                "avg_basket_value": round(AVG_PRICE[category] * upt * profile["basket"] / 50) * 50,
+                "avg_upt": round(upt, 2),
+                "cross_sell_response_rate": round(
+                    profile["response"] + response_adj[tier] + rng.uniform(-3, 3), 1
+                ),
+                "preferred_offer_type": offer,
+            })
+    return pd.DataFrame(rows)
+
+
 # --- Verification output ------------------------------------------------------
 
 def _print_target_sheet(sales_df):
@@ -336,8 +411,10 @@ if __name__ == "__main__":
 
     sales_df, stock_df = simulate_store()
     footfall_df = generate_footfall()
+    loyalty_df = generate_loyalty_tiers()
 
-    for name, df in (("sales", sales_df), ("stock", stock_df), ("footfall", footfall_df)):
+    for name, df in (("sales", sales_df), ("stock", stock_df), ("footfall", footfall_df),
+                     ("loyalty_tiers", loyalty_df)):
         path = os.path.join(DATA_DIR, f"{name}.csv")
         df.to_csv(path, index=False)
         print(f"Wrote {len(df):>6} rows to data/{name}.csv")
