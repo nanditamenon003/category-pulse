@@ -65,6 +65,8 @@ CSS = f"""
 /* Keep Streamlit's header and toolbar: the page menu lives inside them. Developer
    buttons are already off via toolbarMode = "minimal" in .streamlit/config.toml. */
 #MainMenu, footer, [data-testid="stDecoration"], [data-testid="stAppDeployButton"] {{ display: none; }}
+/* Streamlit Cloud adds "Fork" and GitHub buttons to the toolbar of public apps. */
+[data-testid="stToolbarActions"] {{ display: none; }}
 header[data-testid="stHeader"] {{ background: {PAGE}; border-bottom: 1px solid {BORDER}; }}
 .block-container {{ padding-top: 4.5rem; padding-bottom: 6rem; max-width: 1100px; }}
 
