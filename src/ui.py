@@ -136,8 +136,10 @@ header[data-testid="stHeader"] {{ background: {PAGE}; border-bottom: 1px solid {
 .cp-row-text {{ font-size: 13px; color: {TEXT}; margin-top: 2px; }}
 .cp-chev {{ font-size: 26px; color: {MUTED}; line-height: 1; }}
 
-/* Clickable cards: an invisible button laid over the whole card. */
+/* Clickable cards: an invisible button laid over the whole card. Streamlit gives text
+   blocks a negative bottom margin, which made cards overlap the gap below them. */
 [class*="st-key-click_"] {{ position: relative; }}
+[class*="st-key-click_"] [data-testid="stMarkdownContainer"] {{ margin-bottom: 0 !important; }}
 [class*="st-key-click_"] [class*="st-key-open_"] {{ position: absolute; inset: 0; margin: 0; z-index: 2;
                                                    width: 100% !important; height: 100% !important; }}
 [class*="st-key-click_"] [class*="st-key-open_"] div,
@@ -154,6 +156,13 @@ header[data-testid="stHeader"] {{ background: {PAGE}; border-bottom: 1px solid {
 .cp-do {{ background: {PAGE}; border: 1px solid {BORDER}; border-radius: 8px; padding: 10px 12px;
          font-size: 14px; color: {TEXT}; margin-top: 8px; }}
 
+/* Category card rows: cards wrap across the row and share it evenly. */
+[class*="st-key-cards_"] {{ row-gap: 8px !important; }}
+[class*="st-key-cards_"] > div:has(> [class*="st-key-click_cat_"]),
+[class*="st-key-cards_"] > [class*="st-key-click_cat_"] {{ flex: 1 1 190px; min-width: 180px; max-width: 280px; }}
+[class*="st-key-click_cat_"] .cp-card {{ height: 100%; }}
+.cp-showing {{ font-size: 13px; color: {MUTED}; margin: 6px 0 4px; }}
+
 /* Text links (tertiary buttons) use the accent colour; pop-up bullets a touch smaller. */
 .stButton button[kind="tertiary"], .stButton button[kind="tertiary"] p {{ color: {ACCENT}; }}
 [role="dialog"] li, [role="dialog"] li p {{ font-size: 14px; }}
@@ -164,6 +173,10 @@ header[data-testid="stHeader"] {{ background: {PAGE}; border-bottom: 1px solid {
 
 @media (max-width: 640px) {{
   .cp-grid {{ grid-template-columns: 1fr; }}
+  /* Filter buttons wrap onto a new line instead of scrolling sideways out of view. */
+  [data-testid="stButtonGroup"] > div:has(> button) {{ flex-wrap: wrap; overflow-x: visible; row-gap: 6px; }}
+  [class*="st-key-cards_"] > div:has(> [class*="st-key-click_cat_"]),
+  [class*="st-key-cards_"] > [class*="st-key-click_cat_"] {{ max-width: none; flex-basis: 100%; }}
   .cp-num {{ font-size: 24px; }}
   .block-container {{ padding-top: 4rem; }}
   /* On phones the chat button shrinks to a round icon so it covers less content. */
@@ -294,16 +307,18 @@ def heading(text, sub=""):
     return f'<div class="cp-h">{esc(text)}{sub_html}</div>'
 
 
-def category_card(p, show_line=True):
+def category_card(p, show_line=True, cause=None):
     name = p["category"] if show_line else CATEGORY_PRODUCT[p["category"]]
     tone = STATUS[p["status"]][1]
     detail = f"{p['pct_vs_pace']:+.0f}% vs pace"
     if p["status"] in ("behind", "drifting") and p["needed_units_per_day"] > 0:
         detail += f" · needs {p['needed_units_per_day']:.1f}/day"
+    chip = cause_chip(cause) if p["status"] in ("behind", "drifting") else ""
     return (
-        f'<div class="cp-card {tone}">{pill(p["status"])}'
+        f'<div class="cp-card {tone}">{pill(p["status"])}{chip}'
         f'<div class="cp-name">{esc(name)}</div>'
         f'<div class="cp-num">{p["units_sold_so_far"]}<span class="cp-of"> / {p["monthly_target"]}</span></div>'
+        f'{progress_bar(p["units_sold_so_far"], p["monthly_target"], p["expected_units_by_now"])}'
         f'<div class="cp-small">{esc(detail)}</div></div>'
     )
 

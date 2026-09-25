@@ -367,16 +367,109 @@ def pace_chart(pace):
     ).configure(background=PAGE)
 
 
+DEPARTMENT_FILTER = ["All", "Menswear", "Womenswear", "Kidswear"]
+STATUS_FILTER = {"Behind": "behind", "Drifting": "drifting", "On pace": "on_pace",
+                 "Ahead": "ahead", "Too early": "too_early"}
+SORT_ORDERS = {
+    "By line": None,
+    "Worst first": lambda p: p["pct_vs_pace"],
+    "Best first": lambda p: -p["pct_vs_pace"],
+    "Biggest target": lambda p: -p["monthly_target"],
+}
+
+
+def _card_row(cards, key, diags):
+    """A wrapping row of clickable category cards; clicking one opens its detail."""
+    with st.container(horizontal=True, wrap=True, gap="small", key=f"cards_{key}"):
+        for p, show_line in cards:
+            markup = category_card(p, show_line=show_line, cause=diags[p["category"]]["cause"])
+            if clickable(f"cat_{slug(p['category'])}", markup, f"Open {p['category']}"):
+                category_dialog(p["category"])
+
+
+def _category_table(shown, filters_key):
+    rows = pd.DataFrame([
+        {
+            "Status": STATUS[p["status"]][0],
+            "Category": p["category"],
+            "Sold": p["units_sold_so_far"],
+            "Target": p["monthly_target"],
+            "Progress": round(p["units_sold_so_far"] / p["monthly_target"] * 100),
+            "vs pace": p["pct_vs_pace"],
+            "Per day": p["actual_units_per_day"],
+            "Needs per day": p["needed_units_per_day"],
+            "Month-end (projection)": p["projected_month_end_if_current_rate_continues"],
+        }
+        for p in shown
+    ])
+    status_colour = {"Behind": RED, "Drifting": "#8A6300", "On pace": GREEN, "Ahead": GREEN}
+    styled = rows.style.map(
+        lambda v: f"color: {status_colour.get(v, TEXT)}; font-weight: 700", subset=["Status"])
+    # A new key per filter combination, so a ticked row doesn't carry over to a
+    # different category once the filters change.
+    table_key = f"category_table_{filters_key}"
+    event = st.dataframe(
+        styled, hide_index=True, width="stretch", key=table_key,
+        on_select="rerun", selection_mode="single-row",
+        column_config={
+            # Neutral, like the card progress bars: indigo is kept for things you can click.
+            "Progress": st.column_config.ProgressColumn(
+                "Sold vs target", min_value=0, max_value=100, format="%d%%", color=TEXT),
+            "vs pace": st.column_config.NumberColumn("vs pace", format="%+.0f%%"),
+            "Per day": st.column_config.NumberColumn(format="%.1f"),
+            "Needs per day": st.column_config.NumberColumn(format="%.1f"),
+        },
+    )
+    # Open the detail when a new row is picked. A picked row stays selected, so
+    # remember it; otherwise the pop-up would reopen on every later click.
+    picked = event.selection.rows[0] if event.selection.rows else None
+    last_pick_key = f"last_pick_{table_key}"
+    if picked is not None and picked != st.session_state.get(last_pick_key):
+        st.session_state[last_pick_key] = picked
+        category_dialog(rows.iloc[picked]["Category"])
+    elif picked is None:
+        st.session_state[last_pick_key] = None
+
+
 def categories_page():
     hour = current_hour()
-    page_title("Categories", "Every category's month-to-date pace. Being redesigned in step 3.")
+    page_title("Categories", "Every category's month-to-date pace. Tap a card or a row for the "
+                             "full picture.")
     pace = pace_at(hour)
-    for line, department in LINES.items():
-        cards = [category_card(p, show_line=False) for p in pace if p["line"] == line]
-        html_block(heading(line, department) + grid(cards))
-    html_block(heading("Pace by category", "worst first"))
-    # theme=None so Streamlit's default chart styling (gridlines etc.) doesn't override ours.
-    st.altair_chart(pace_chart(pace), width="stretch", theme=None)
+    diags = diagnoses_at(hour)
+
+    with st.container(horizontal=True, wrap=True, vertical_alignment="bottom", gap="medium"):
+        department = st.segmented_control("Department", DEPARTMENT_FILTER, default="All",
+                                          key="cat_department") or "All"
+        statuses = st.pills("Status", list(STATUS_FILTER), selection_mode="multi", key="cat_status")
+        sort = st.selectbox("Sort", list(SORT_ORDERS), key="cat_sort", width=170)
+        view = st.segmented_control("View", ["Cards", "Table", "Chart"], default="Cards",
+                                    key="cat_view") or "Cards"
+
+    wanted = {STATUS_FILTER[s] for s in statuses} if statuses else set(STATUS_FILTER.values())
+    shown = [p for p in pace
+             if p["status"] in wanted and (department == "All" or p["department"] == department)]
+    if SORT_ORDERS[sort]:
+        shown = sorted(shown, key=SORT_ORDERS[sort])
+    html_block(f'<div class="cp-showing">Showing {len(shown)} of {len(pace)} categories</div>')
+
+    if not shown:
+        html_block('<div class="cp-panel"><p>No categories match these filters.</p></div>')
+        return
+
+    if view == "Table":
+        _category_table(shown, slug(f"{department}-{'-'.join(sorted(statuses or []))}-{sort}"))
+    elif view == "Chart":
+        # theme=None so Streamlit's default chart styling (gridlines etc.) doesn't override ours.
+        st.altair_chart(pace_chart(shown), width="stretch", theme=None)
+    elif sort == "By line":
+        for line, dept in LINES.items():
+            in_line = [(p, False) for p in shown if p["line"] == line]
+            if in_line:
+                html_block(heading(line, dept))
+                _card_row(in_line, line, diags)
+    else:
+        _card_row([(p, True) for p in shown], "sorted", diags)
 
 
 def coming_soon_page(title, what):
