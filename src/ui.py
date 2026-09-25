@@ -19,10 +19,13 @@ import digest
 import generate_data
 import kpi
 import loyalty
+import staffing
 import stock
 from config import (
+    CATEGORIES,
     CATEGORY_PRODUCT,
     DEFAULT_CURRENT_HOUR,
+    DEPARTMENTS,
     STORE_HOURS,
     TODAY_DAY,
     month_calendar,
@@ -251,11 +254,58 @@ def diagnoses_at(hour):
 
 
 @st.cache_data(show_spinner=False)
+def playbook_for(category):
+    return loyalty.get_tier_playbook(category)
+
+
+@st.cache_data(show_spinner=False)
 def cross_sell_at(hour):
     data = load_data()
     ideas = loyalty.get_cross_sell_ideas(TODAY_DAY, hour, sales_df=data["sales_df"],
                                          stock_df=data["stock_df"])
     return {i["category"]: i for i in ideas}
+
+
+@st.cache_data(show_spinner="Checking every size...")
+def risky_sizes_at(hour):
+    """Sizes likely to run out before the next scheduled delivery (a projection), all categories."""
+    data = load_data()
+    rows, next_delivery = [], None
+    for category in CATEGORIES:
+        cover = stock.get_days_of_cover(category, TODAY_DAY, hour, stock_df=data["stock_df"],
+                                        sales_df=data["sales_df"])
+        next_delivery = cover["next_scheduled_delivery_day"]
+        for s in cover["sizes"]:
+            if s["likely_out_before_next_delivery"]:
+                rows.append({"category": category, **s})
+    return sorted(rows, key=lambda r: r["projected_days_of_cover"]), next_delivery
+
+
+@st.cache_data(show_spinner=False)
+def zones_at(hour):
+    """Visitors today and visitors-vs-buyers for each floor zone."""
+    data = load_data()
+    return [
+        {
+            "footfall": kpi.get_footfall(zone=zone, day=TODAY_DAY, hour=hour,
+                                         footfall_df=data["footfall_df"]),
+            "conversion": kpi.get_conversion_metrics(zone=zone, day=TODAY_DAY, hour=hour,
+                                                     sales_df=data["sales_df"],
+                                                     footfall_df=data["footfall_df"]),
+        }
+        for zone in DEPARTMENTS
+    ]
+
+
+@st.cache_data(show_spinner=False)
+def staffing_for(day):
+    """Staffing advice for `day`, plus each zone's hourly visitor pattern for the chart."""
+    footfall_df = load_data()["footfall_df"]
+    rec = staffing.get_staffing_recommendation(day, footfall_df=footfall_df)
+    busy = rec["day_type"] != "weekday"
+    patterns = {z: staffing.get_peak_hours(z, busy, before_day=day, footfall_df=footfall_df)
+                for z in DEPARTMENTS}
+    return rec, patterns
 
 
 @st.cache_data(show_spinner="Looking up this category...")

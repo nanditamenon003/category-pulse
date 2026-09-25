@@ -14,7 +14,7 @@ import pandas as pd
 import streamlit as st
 
 import agent
-from config import DEMO_QUESTION_LIMIT, LINES, STORE_HOURS, TODAY_DAY
+from config import CATEGORIES, DEMO_QUESTION_LIMIT, LINES, STORE_HOURS, TODAY_DAY, month_calendar
 from ui import (
     AMBER,
     BORDER,
@@ -43,11 +43,15 @@ from ui import (
     pace_at,
     page_title,
     pill,
+    playbook_for,
     progress_bar,
+    risky_sizes_at,
     slug,
+    staffing_for,
     stock_health_at,
     time_label,
     today_at,
+    zones_at,
 )
 
 # Short chip labels for the chat, mapped to the full question the AI receives.
@@ -312,7 +316,11 @@ def _sell_tab(category, detail, hour):
         html_block('<div class="cp-small">This category isn\'t behind, so there\'s no cross-sell '
                    'push for it. Here is how each loyalty tier responds, if you want one.</div>')
 
-    playbook = detail["playbook"]
+    html_block(heading("Loyalty tiers", "best responders first"))
+    _tier_table(detail["playbook"])
+
+
+def _tier_table(playbook):
     table = pd.DataFrame([
         {
             "Tier": t["tier"],
@@ -322,7 +330,6 @@ def _sell_tab(category, detail, hour):
         }
         for t in playbook["tiers_ranked_by_response"]
     ])
-    html_block(heading("Loyalty tiers", "best responders first"))
     st.dataframe(table, hide_index=True, width="stretch")
     html_block('<div class="cp-small">Targeting is by loyalty tier only. No individual customer data '
                'is used, by design.</div>')
@@ -472,11 +479,202 @@ def categories_page():
         _card_row([(p, True) for p in shown], "sorted", diags)
 
 
-def coming_soon_page(title, what):
-    def page():
-        page_title(title, what)
-        st.info("This page is being built in the next steps of the redesign.")
-    return page
+WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+# --- Stock page ---------------------------------------------------------------------------------
+
+def _stock_problem_text(r):
+    core = " or ".join(r["core_sizes"])
+    if r["verdict"] == "broken_size_run":
+        return (f"broken size run. No {core}, yet {r['total_remaining']} units sit on the shelf "
+                f"({r['total_as_pct_of_usual']}% of usual).")
+    if r["verdict"] == "stockout":
+        return ("sold out, nothing left in any size." if r["total_remaining"] == 0
+                else f"almost sold out, {r['total_remaining']} units left.")
+    return f"running out: no {core}, and only {r['total_remaining']} units left overall."
+
+
+def stock_page():
+    hour = current_hour()
+    page_title("Stock", "What's on the shelf, what's missing, and what's about to run out.")
+    pace = {p["category"]: p for p in pace_at(hour)}
+    problems = stock_health_at(hour)
+    pieces = last_pieces_at(hour)
+    risky, next_delivery = risky_sizes_at(hour)
+    delivery_weekday = WEEKDAYS[month_calendar()[next_delivery - 1]["weekday"]] if next_delivery else ""
+
+    html_block('<div class="cp-kpis">'
+               + kpi_card("Stock problems", f"{len(problems)}", "stockouts and broken size runs",
+                          tone="red" if problems else "")
+               + kpi_card("Last pieces today", f"{len(pieces)}",
+                          f"{sum(a['is_core_size'] for a in pieces)} in core sizes")
+               + kpi_card("Likely to run out", f"{len(risky)}", "sizes, before the next delivery")
+               + kpi_card("Next delivery", f"Day {next_delivery}" if next_delivery else "None",
+                          delivery_weekday)
+               + "</div>")
+
+    html_block(heading("Stock problems", "tap for sizes and deliveries"))
+    if not problems:
+        html_block('<div class="cp-panel"><p>No stockouts or broken size runs right now.</p></div>')
+    for r in problems:
+        tone = STATUS[pace[r["category"]]["status"]][1]
+        if clickable(f"stk_{slug(r['category'])}", _compact_row(tone, r["category"], _stock_problem_text(r)),
+                     f"Open {r['category']}"):
+            category_dialog(r["category"])
+
+    html_block(heading("Last pieces today", "in the order they happened"))
+    if not pieces:
+        html_block('<div class="cp-panel"><p>No size has dropped to its last piece today.</p></div>')
+    for a in pieces:
+        kind = "a core size" if a["is_core_size"] else "not a core size"
+        text = f"last one left in {a['size']} ({kind}), since {a['hour']}:00-{a['hour'] + 1}:00"
+        tone = STATUS[pace[a["category"]]["status"]][1]
+        if clickable(f"lp_{slug(a['category'])}_{slug(a['size'])}", _compact_row(tone, a["category"], text),
+                     f"Open {a['category']}"):
+            category_dialog(a["category"])
+
+    html_block(heading("Likely to run out before the next delivery",
+                       "a projection from each size's selling rate over the last 7 days"))
+    if not risky:
+        html_block('<div class="cp-panel"><p>No size looks likely to run out before the next '
+                   'delivery.</p></div>')
+    else:
+        st.dataframe(pd.DataFrame([
+            {
+                "Category": r["category"],
+                "Size": r["size"],
+                "Left": r["units_remaining"],
+                "Sells per day": r["avg_units_sold_per_day_last_7_days"],
+                "Days it will last": r["projected_days_of_cover"],
+            }
+            for r in risky
+        ]), hide_index=True, width="stretch")
+
+
+# --- Floor and staff page ---------------------------------------------------------------------
+
+READING_LABEL = {
+    "normal": "normal",
+    "possible_dip": "possible dip, not proven",
+    "conversion_problem": "fewer are buying",
+    "traffic_problem": "fewer visitors",
+    "traffic_and_conversion_down": "fewer visitors and fewer buying",
+    "too_few_sales_to_judge": "too few sales to judge",
+}
+
+
+def _hour_chart(pattern):
+    peaks = set()
+    for window in pattern["peak_windows"]:
+        start, end = (int(t.split(":")[0]) for t in window.split("-"))
+        peaks.update(range(start, end))
+    df = pd.DataFrame([
+        {"Hour": f"{h}:00", "Visitors": v, "Peak": "Peak" if h in peaks else "Other"}
+        for h, v in pattern["avg_visitors_by_hour"].items()
+    ])
+    return alt.Chart(df).mark_bar(size=14).encode(
+        x=alt.X("Hour:N", sort=None, title=None,
+                axis=alt.Axis(labelAngle=0, labelExpr="split(datum.label, ':')[0]")),
+        y=alt.Y("Visitors:Q", title=None, axis=alt.Axis(grid=False, labels=False, ticks=False,
+                                                        domain=False)),
+        color=alt.Color("Peak:N", legend=None,
+                        scale=alt.Scale(domain=["Peak", "Other"], range=[TEXT, "#C9C9C4"])),
+        tooltip=["Hour", alt.Tooltip("Visitors:Q", format=".1f", title="Average visitors")],
+    ).properties(height=120).configure_view(stroke=None).configure_axis(
+        labelFont="Inter", labelFontSize=10, labelColor=MUTED, domainColor=BORDER, tickColor=BORDER,
+    ).configure(background="#FFFFFF")
+
+
+def floor_page():
+    hour = current_hour()
+    page_title("Floor and staff", "Who's coming in, how many are buying, and where to put the team "
+                                  "tomorrow.")
+    zones = zones_at(hour)
+
+    html_block(heading("Visitors today", f"by {time_label(hour)}, vs a typical day of the same kind")
+               + '<div class="cp-kpis">'
+               + "".join(
+                   kpi_card(z["footfall"]["zone"], f"{z['footfall']['visitors_today_so_far']}",
+                            f"typical {z['footfall']['typical_visitors_by_this_hour']:.0f} "
+                            f"({z['footfall']['pct_vs_typical']:+.0f}%)")
+                   for z in zones)
+               + "</div>")
+
+    html_block(heading("Visitors vs buyers", "last 3 days + today, vs the first half of the month")
+               + '<div class="cp-kpis">'
+               + "".join(
+                   kpi_card(f"{z['conversion']['zone']}: share who bought",
+                            f"{z['conversion']['recent_last_3_days_and_today']['conversion_rate_pct']}%",
+                            f"was {z['conversion']['baseline_earlier_this_month']['conversion_rate_pct']}%"
+                            f" · {READING_LABEL[z['conversion']['reading']]}")
+                   for z in zones)
+               + "</div>")
+
+    rec, patterns = staffing_for(TODAY_DAY + 1)
+    html_block(heading(f"Tomorrow: {rec['weekday']}",
+                       f"from the last {len(rec['based_on_days'])} {rec['day_type']}s"))
+    for note in rec["notes"]:
+        html_block(f'<div class="cp-do">{esc(note)}</div>')
+
+    columns = st.columns(len(patterns))
+    for column, (zone, pattern) in zip(columns, patterns.items()):
+        with column:
+            reliability = "" if pattern["reliability"] == "good" else " (rough guide: low traffic)"
+            html_block(f'<div class="cp-row-name">{esc(zone)}</div>'
+                       f'<div class="cp-small">Peaks {esc(", ".join(pattern["peak_windows"]))}'
+                       f'{esc(reliability)}</div>')
+            st.altair_chart(_hour_chart(pattern), width="stretch", theme=None)
+
+    split = rec["suggested_floor_split_at_busiest_hour_pct"]
+    bars = "".join(
+        f'<div class="cp-row-text" style="margin-top:6px">{esc(zone)} · {pct}%</div>'
+        f'<div class="cp-track"><div class="cp-fill" style="width:{pct}%"></div></div>'
+        for zone, pct in split.items())
+    html_block(heading(f"Floor team at {rec['store_busiest_hour']}:00, the busiest hour",
+                       "split in proportion to where shoppers are")
+               + f'<div class="cp-panel">{bars}</div>')
+    with st.expander("Which past days is this based on?"):
+        st.write(", ".join(rec["based_on_days"]))
+
+
+# --- Sell page --------------------------------------------------------------------------------------
+
+def sell_page():
+    hour = current_hour()
+    page_title("Sell", "Cross-sell ideas for categories behind pace, and what each loyalty tier "
+                       "responds to.")
+    ideas = cross_sell_at(hour)
+
+    html_block(heading("Cross-sell ideas right now", "only for categories that are genuinely behind"))
+    if not ideas:
+        html_block('<div class="cp-panel"><p>No category is behind pace, so there\'s no cross-sell '
+                   'push needed right now.</p></div>')
+    for category, idea in ideas.items():
+        cause = idea["stock_verdict"] if idea["stock_verdict"] in ("stockout", "broken_size_run") else None
+        first = (f'<div class="cp-do"><b>First:</b> {esc(idea["supply_action"])}</div>'
+                 if idea.get("supply_action") else "")
+        html_block(
+            f'<div class="cp-panel">{pill(idea["status"])}{cause_chip(cause)}'
+            f'<div class="cp-row-name">{esc(category)}</div>{first}'
+            f'<div class="cp-do"><b>At the till:</b> {esc(idea["at_the_till"])}</div></div>'
+        )
+        if st.button(f"Open {category} details", key=f"sell_open_{slug(category)}", type="tertiary"):
+            category_dialog(category)
+
+    html_block(heading("Loyalty tier playbook", "pick any category"))
+    options = list(ideas) + [c for c in CATEGORIES if c not in ideas]
+    chosen = st.selectbox("Category", options, key="sell_category", label_visibility="collapsed")
+    _tier_table(playbook_for(chosen))
+
+    with st.expander("Best-responding tier for every category"):
+        best = []
+        for category in CATEGORIES:
+            top = playbook_for(category)["tiers_ranked_by_response"][0]
+            best.append({"Category": category, "Best tier": top["tier"],
+                         "Takes up cross-sells": f"{top['cross_sell_response_rate_pct']:.0f}%",
+                         "Offer at the till": top["offer_at_the_till"]})
+        st.dataframe(pd.DataFrame(best), hide_index=True, width="stretch")
 
 
 def summary_page():
