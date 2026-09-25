@@ -122,33 +122,6 @@ def _tier_pitch(playbook):
     return best, pitch
 
 
-def _supply_action(category, stock_verdict, health, day, hour, stock_df, sales_df):
-    """
-    What to do about supply, stated only as far as the delivery history
-    actually shows it (never assumed).
-    """
-    history = stock.get_stock_history(category, day, hour, stock_df=stock_df, sales_df=sales_df)
-    last = history["deliveries_received"][-1] if history["deliveries_received"] else None
-    missed = history["scheduled_deliveries_not_received"]
-
-    if stock_verdict == "broken_size_run":
-        core = health["core_sizes"]
-        sizes = ", ".join(core)
-        if last and all(s in last["core_sizes_missing"] for s in core):
-            why = f"the last delivery (day {last['day']}) came without them"
-        elif last:
-            why = f"they've sold through since the last delivery (day {last['day']})"
-        else:
-            why = "no delivery has arrived this month"
-        return f"Request a transfer of sizes {sizes} from a nearby store: {why}."
-
-    if missed:
-        days = " and ".join(f"day {d}" for d in missed)
-        return (f"The scheduled delivery on {days} never arrived: chase it with the warehouse, "
-                f"or request an inter-store transfer.")
-    return "Request a replenishment or an inter-store transfer."
-
-
 def get_cross_sell_ideas(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, statuses=("behind",),
                          sales_df=None, stock_df=None, loyalty_df=None):
     """
@@ -192,8 +165,8 @@ def get_cross_sell_ideas(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, statuses=("be
             partners = _eligible_partners(category, SUBSTITUTES.get(product, []),
                                           pace_by_category, verdict)
             idea["type"] = "substitute"
-            idea["supply_action"] = _supply_action(category, stock_verdict, health[category],
-                                                   day, hour, stock_df, sales_df)
+            idea["supply_action"] = stock.suggest_supply_action(
+                category, day, hour, health=health[category], stock_df=stock_df, sales_df=sales_df)
             if partners:
                 partner = partners[0]["category"]
                 best, pitch = _tier_pitch(get_tier_playbook(partner, loyalty_df))
@@ -223,8 +196,8 @@ def get_cross_sell_ideas(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, statuses=("be
                 missing = ", ".join(h["core_sizes"])
                 plentiful = ", ".join(s for s, u in h["other_sizes_remaining"].items() if u >= 5)
                 idea["type"] = "complement_in_available_sizes"
-                idea["supply_action"] = _supply_action(category, stock_verdict, h,
-                                                       day, hour, stock_df, sales_df)
+                idea["supply_action"] = stock.suggest_supply_action(
+                    category, day, hour, health=h, stock_df=stock_df, sales_df=sales_df)
                 idea["at_the_till"] = (
                     f"{category} is {abs(pace['pct_vs_pace']):.0f}% behind pace because sizes {missing} "
                     f"are gone. Until they're back, focus on shoppers who fit {plentiful}, where "

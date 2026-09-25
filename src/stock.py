@@ -223,6 +223,41 @@ def get_stock_health_report(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, stock_df=N
     return [r for r in report if r["verdict"] != "healthy"]
 
 
+def suggest_supply_action(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, health=None,
+                          stock_df=None, sales_df=None):
+    """
+    What to do about supply for a category that's out or has a broken size
+    run, stated only as far as the delivery history actually shows it.
+    Returns None if its stock is healthy.
+    """
+    if stock_df is None:
+        stock_df = load_stock_data()
+    if health is None:
+        health = check_size_runs(category, day, hour, stock_df=stock_df)
+    if health["verdict"] == "healthy":
+        return None
+
+    history = get_stock_history(category, day, hour, stock_df=stock_df, sales_df=sales_df)
+    last = history["deliveries_received"][-1] if history["deliveries_received"] else None
+    missed = history["scheduled_deliveries_not_received"]
+
+    if health["verdict"] == "broken_size_run":
+        sizes = " and ".join(health["core_sizes"])
+        if last and all(s in last["core_sizes_missing"] for s in health["core_sizes"]):
+            why = f"the last delivery, on day {last['day']}, came without them"
+        elif last:
+            why = f"they've sold through since the last delivery, on day {last['day']}"
+        else:
+            why = "no delivery has arrived this month"
+        return f"Request a transfer of sizes {sizes} from a nearby store ({why})."
+
+    if missed:
+        days = " and ".join(f"day {d}" for d in missed)
+        return (f"Chase the delivery due on {days}, which never arrived, or request an "
+                f"inter-store transfer.")
+    return "Request a replenishment or an inter-store transfer."
+
+
 def get_last_piece_alerts(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, stock_df=None, sales_df=None):
     """
     Every size that dropped to exactly LAST_PIECE_THRESHOLD unit(s) on `day`
