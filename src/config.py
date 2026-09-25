@@ -263,6 +263,22 @@ MIN_EXPECTED_UNITS_FOR_STATUS = 5
 NORMAL_VARIATION_Z = 1.65
 DRIFTING_Z = 1.0
 
+# Traffic vs conversion (Phase 6d). Comparing the last 7 full days with
+# earlier this month:
+#   - a traffic problem: visitors per day down more than TRAFFIC_DROP_PCT
+#   - a conversion problem: visitors normal, but the share of visitors who
+#     buy is down more than CONVERSION_DROP_PCT — usually stock, sizes, price
+#     or service, not marketing
+# Categories expected to make fewer than MIN_TRANSACTIONS_FOR_READING sales
+# in the window are too small to judge either way.
+TRAFFIC_DROP_PCT = 15
+CONVERSION_DROP_PCT = 20
+MIN_TRANSACTIONS_FOR_READING = 10
+
+# Staffing (Phase 6b): an hour counts as a peak if its average visitors are
+# at least this share of the zone's busiest hour.
+PEAK_SHARE_OF_BUSIEST_HOUR = 0.80
+
 # If a category needs more than this multiple of its current daily sales rate
 # to reach target by month end, flag it as unlikely without action: at 1.5x,
 # "keep doing what we're doing" clearly won't get there.

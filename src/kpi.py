@@ -17,6 +17,7 @@ from config import (
     CATEGORY_DEPARTMENT,
     CATEGORY_LINE,
     CATEGORY_PRODUCT,
+    CONVERSION_DROP_PCT,
     DAYS_IN_MONTH,
     DEFAULT_CURRENT_HOUR,
     DEPARTMENTS,
@@ -24,12 +25,14 @@ from config import (
     LAST_YEAR_UNITS,
     LINES,
     MIN_EXPECTED_UNITS_FOR_STATUS,
+    MIN_TRANSACTIONS_FOR_READING,
     MONTHLY_TARGETS,
     NORMAL_VARIATION_Z,
     PACE_THRESHOLD_PCT,
     REQUIRED_RATE_STRETCH,
     STORE_HOURS,
     TODAY_DAY,
+    TRAFFIC_DROP_PCT,
     day_weight,
     is_busy_day,
     month_calendar,
@@ -347,15 +350,140 @@ def get_today_pace(line=None, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, sales_df
     return results
 
 
-def get_conversion_metrics(category, hour, sales_df=None, footfall_df=None):
+def _pct_change(new, old):
+    return round((new - old) / old * 100, 1) if old else None
+
+
+def get_conversion_metrics(category=None, line=None, zone=None, day=TODAY_DAY,
+                           hour=DEFAULT_CURRENT_HOUR, sales_df=None, footfall_df=None):
     """
-    Conversion rate and units-per-transaction (UPT). Phase 4 stub — full
-    implementation lands in Phase 6d.
+    Conversion rate and units per transaction (UPT) for a category, a line or
+    a whole floor zone, and a plain reading of whether a slowdown is a
+    traffic problem or a conversion problem.
+
+      conversion rate = transactions / visitors to the floor zone x 100
+      UPT             = units sold / transactions
+
+    Visitors are counted per zone, so a category's conversion is its share of
+    its zone's visitors who bought from it.
+
+    The reading compares "recent" (the last 3 days plus today so far, where a
+    current problem shows up) with a "baseline" (the month before the last
+    week, before recent problems began). Traffic is judged against what a
+    typical day of the same kind (weekday vs weekend/sale day) brought in the
+    baseline, so a weekend-heavy stretch isn't mistaken for a traffic change.
     """
+    _validate_moment(day, hour)
+    if sales_df is None:
+        sales_df = load_sales_data()
+    if footfall_df is None:
+        footfall_df = load_footfall_data()
+
+    if category is not None:
+        categories, label = [category], category
+        zone = CATEGORY_DEPARTMENT[category]
+    elif line is not None:
+        if line not in LINES:
+            raise ValueError(f"Unknown line {line!r}; lines are {list(LINES)}")
+        categories, label = [c for c in CATEGORIES if CATEGORY_LINE[c] == line], line
+        zone = LINES[line]
+    elif zone in DEPARTMENTS:
+        categories, label = [c for c in CATEGORIES if CATEGORY_DEPARTMENT[c] == zone], zone
+    else:
+        raise ValueError(f"Give a category, a line, or a zone from {DEPARTMENTS}")
+
+    # Transactions are repeated on each size row of a category-hour: count once.
+    per_category_hour = sales_df[sales_df["category"].isin(categories)].groupby(
+        ["day", "hour", "category"]
+    ).agg(units=("units_sold", "sum"), transactions=("transactions", "first")).reset_index()
+    visitors = footfall_df[footfall_df["zone"] == zone]
+
+    def in_window(df, first_day, last_day):
+        """Rows from first_day..last_day, stopping at `hour` on `day` itself."""
+        return df[
+            (df["day"] >= first_day) & (df["day"] <= last_day)
+            & ((df["day"] < day) | (df["hour"] <= hour))
+        ]
+
+    def summarise(first_day, last_day):
+        s = in_window(per_category_hour, first_day, last_day)
+        v = int(in_window(visitors, first_day, last_day)["visitors"].sum())
+        tx, units = int(s["transactions"].sum()), int(s["units"].sum())
+        return {
+            "days": f"{first_day}-{last_day}" if first_day != last_day else str(first_day),
+            "zone_visitors": v,
+            "transactions": tx,
+            "units": units,
+            "conversion_rate_pct": round(tx / v * 100, 1) if v else None,
+            "units_per_transaction": round(units / tx, 2) if tx else None,
+        }
+
+    recent_start = max(1, day - 3)
+    baseline_end = max(1, day - 8)
+    today = summarise(day, day)
+    recent = summarise(recent_start, day)
+    baseline = summarise(1, baseline_end)
+
+    # Typical visitors for the recent days, from baseline days of the same kind.
+    calendar = {d["day"]: d for d in month_calendar()}
+    baseline_days = range(1, baseline_end + 1)
+    typical_recent_visitors = 0.0
+    for d in range(recent_start, day + 1):
+        through = hour if d == day else STORE_HOURS[-1]
+        same_kind = [b for b in baseline_days if is_busy_day(calendar[b]) == is_busy_day(calendar[d])]
+        per_day = visitors[visitors["day"].isin(same_kind) & (visitors["hour"] <= through)]
+        typical_recent_visitors += per_day["visitors"].sum() / max(len(same_kind), 1)
+
+    traffic_change = _pct_change(recent["zone_visitors"], typical_recent_visitors)
+    conversion_change = _pct_change(recent["conversion_rate_pct"] or 0,
+                                    baseline["conversion_rate_pct"] or 0)
+    expected_recent_sales = (baseline["conversion_rate_pct"] or 0) / 100 * recent["zone_visitors"]
+
+    # Same rule as pace: a drop counts as a problem only if it's past the
+    # percentage line AND bigger than normal randomness for these counts.
+    def beyond_noise(expected, actual):
+        return expected > 0 and (expected - actual) > NORMAL_VARIATION_Z * math.sqrt(expected)
+
+    traffic_past_line = traffic_change is not None and traffic_change < -TRAFFIC_DROP_PCT
+    conversion_past_line = conversion_change is not None and conversion_change < -CONVERSION_DROP_PCT
+    traffic_down = traffic_past_line and beyond_noise(typical_recent_visitors, recent["zone_visitors"])
+    conversion_down = conversion_past_line and beyond_noise(expected_recent_sales,
+                                                            recent["transactions"])
+
+    if expected_recent_sales < MIN_TRANSACTIONS_FOR_READING:
+        reading = "too_few_sales_to_judge"
+        explanation = "Too few sales recently to tell traffic and conversion apart."
+    elif traffic_down and conversion_down:
+        reading = "traffic_and_conversion_down"
+        explanation = "Fewer visitors than usual, and fewer of them are buying."
+    elif traffic_down:
+        reading = "traffic_problem"
+        explanation = ("Fewer visitors than usual for these days, but those who come still buy "
+                       "as usual: a footfall / marketing issue.")
+    elif conversion_down:
+        reading = "conversion_problem"
+        explanation = ("Visitors are coming as usual but fewer are buying: usually stock, "
+                       "sizes, price or service rather than marketing.")
+    elif traffic_past_line or conversion_past_line:
+        reading = "possible_dip"
+        explanation = ("Somewhat lower than usual, but within the range normal ups and downs "
+                       "could explain. Worth watching, not yet a proven problem.")
+    else:
+        reading = "normal"
+        explanation = "Visitors and conversion are both in their usual range."
+
     return {
-        "category": category,
-        "hour": hour,
-        "note": "Conversion rate and UPT are not yet available (Phase 6d).",
+        "subject": label,
+        "zone": zone,
+        "as_of": {"day": day, "hour": hour},
+        "today_so_far": today,
+        "recent_last_3_days_and_today": recent,
+        "baseline_earlier_this_month": baseline,
+        "typical_visitors_for_recent_days": round(typical_recent_visitors),
+        "visitors_change_vs_typical_pct": traffic_change,
+        "conversion_rate_change_pct": conversion_change,
+        "reading": reading,
+        "explanation": explanation,
     }
 
 
@@ -432,8 +560,29 @@ def _print_footfall():
               f"{f['typical_visitors_by_this_hour']:>6}   ({f['pct_vs_typical']:+.0f}%)")
 
 
+def _print_conversion():
+    print("\nTraffic vs conversion: last 3 days + today, compared with the first half of the month\n")
+    print(f"{'Subject':<24}{'Visitors vs typical':>21}{'Conversion':>20}{'UPT':>14}   Reading")
+    subjects = [
+        {"category": "Womens Knit Top"}, {"zone": "Womenswear"},
+        {"category": "THM Non Denim Bottom"}, {"category": "TJM Denim Bottom"},
+        {"category": "LB Knit Top"}, {"category": "THT Blazer"},
+    ]
+    for kwargs in subjects:
+        m = get_conversion_metrics(**kwargs)
+        b, r = m["baseline_earlier_this_month"], m["recent_last_3_days_and_today"]
+        print(
+            f"{m['subject']:<24}{r['zone_visitors']:>6} vs {m['typical_visitors_for_recent_days']:<4}"
+            f"({m['visitors_change_vs_typical_pct']:+.0f}%)"
+            f"{b['conversion_rate_pct']:>8}% -> {r['conversion_rate_pct']:<5}%"
+            f"{b['units_per_transaction'] or 0:>7} -> {r['units_per_transaction'] or 0:<5}"
+            f"  {m['reading']}"
+        )
+
+
 if __name__ == "__main__":
     _print_pace_table(TODAY_DAY, DEFAULT_CURRENT_HOUR)
     _print_contribution(TODAY_DAY, DEFAULT_CURRENT_HOUR)
     _print_today_by_line([11, 14, 16, 19])
     _print_footfall()
+    _print_conversion()
