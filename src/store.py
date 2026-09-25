@@ -315,9 +315,10 @@ def _numbers(df, column, table, allow_blank=False):
     bad = values.isna() & (df[column].notna() if allow_blank else True)
     if bad.any():
         example = df.loc[bad, column].iloc[0]
-        raise StoreDataError(f"The {table} table has a {column} that isn't a number: {example!r}.")
+        raise StoreDataError(f"In the {table} table, the {column} column has something that isn't "
+                             f"a number: {example!r}.")
     if (values < 0).any():
-        raise StoreDataError(f"The {table} table has a negative {column}.")
+        raise StoreDataError(f"In the {table} table, the {column} column has a negative number.")
     return values
 
 
@@ -325,8 +326,24 @@ def _has(df, column):
     return column in df.columns and df[column].notna().any()
 
 
+def _parse_dates(values):
+    """
+    Dates as the store's files write them: real dates (from Excel), year-first
+    text (2026-05-24), or day-first text as written in India (24/05/2026).
+    Unreadable ones come back blank.
+    """
+    if pd.api.types.is_datetime64_any_dtype(values):
+        return values
+    text = values.astype(str).str.strip()
+    year_first = text.str.match(r"^\d{4}-\d{1,2}-\d{1,2}")
+    dates = pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
+    dates[year_first] = pd.to_datetime(text[year_first].str[:10], format="%Y-%m-%d", errors="coerce")
+    dates[~year_first] = pd.to_datetime(text[~year_first], dayfirst=True, format="mixed", errors="coerce")
+    return dates
+
+
 def _days(df, table, month_start, days_in_month):
-    dates = pd.to_datetime(df["date"], errors="coerce", dayfirst=True)
+    dates = _parse_dates(df["date"])
     if dates.isna().any():
         example = df.loc[dates.isna(), "date"].iloc[0]
         raise StoreDataError(f"The {table} table has a date that can't be read: {example!r}.")
@@ -395,7 +412,7 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
     sales = sales.dropna(subset=["date"]).copy()
     if sales.empty:
         raise StoreDataError("The sales table has no rows.")
-    first = pd.to_datetime(sales["date"], errors="coerce", dayfirst=True).min()
+    first = _parse_dates(sales["date"]).min()
     if pd.isna(first):
         raise StoreDataError("The sales table's dates can't be read.")
     month_start = date(first.year, first.month, 1)

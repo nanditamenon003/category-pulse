@@ -214,13 +214,57 @@ def load_data():
 
 
 def current_store():
-    """The store every page shows. For now always the demo store."""
+    """The store every page shows: the demo, or the visitor's own uploaded data."""
+    if st.session_state.get("use_my_store") and st.session_state.get("my_store") is not None:
+        return st.session_state["my_store"]
     return load_data()
+
+
+# Saved choices that only make sense for one store, cleared when switching.
+_STORE_SPECIFIC_KEYS = ("hour", "cat_department", "sell_category", "chat_chip")
+_UPLOAD_KEYS = ("my_store", "upload_result", "upload_key", "upload_files")
+
+
+def request_store(mine):
+    """Switch between the demo (False) and the visitor's own store (True) on the next run."""
+    st.session_state["switch_to_mine"] = mine
+
+
+def request_forget():
+    """Remove the visitor's uploaded data on the next run."""
+    st.session_state["forget_mine"] = True
+
+
+def apply_store_switch():
+    """
+    Carries out a requested switch. Runs at the very top of app.py, before
+    any widget exists, because Streamlit only lets a widget's saved value be
+    cleared before the widget is drawn.
+    """
+    if st.session_state.pop("forget_mine", False):
+        for key in _UPLOAD_KEYS:
+            st.session_state.pop(key, None)
+        # Worked-out results for the uploaded data go too (the demo's rebuild on demand).
+        _lookup.clear()
+        _slow_lookup.clear()
+        st.session_state["switch_to_mine"] = False
+    if "switch_to_mine" not in st.session_state:
+        return
+    mine = st.session_state.pop("switch_to_mine")
+    st.session_state["use_my_store"] = bool(mine) and st.session_state.get("my_store") is not None
+    if st.session_state["use_my_store"]:
+        st.session_state.pop("tour_step", None)  # the tour is written for the demo store
+    for key in list(st.session_state):
+        if key in _STORE_SPECIFIC_KEYS or str(key).startswith(("category_table_", "last_pick_")):
+            del st.session_state[key]
 
 
 def current_hour():
     """The hour slot the whole app is looking at (10 = 10:00-11:00 ... 19 = 19:00-20:00)."""
-    return st.session_state.setdefault("hour", current_store().default_hour)
+    s = current_store()
+    if st.session_state.get("hour") not in s.hours:
+        st.session_state["hour"] = s.default_hour
+    return st.session_state["hour"]
 
 
 def time_label(hour):
@@ -269,7 +313,8 @@ def _zones(s, hour):
     return [
         {
             "footfall": kpi.get_footfall(zone=zone, hour=hour, store=s),
-            "conversion": kpi.get_conversion_metrics(zone=zone, hour=hour, store=s),
+            "conversion": (kpi.get_conversion_metrics(zone=zone, hour=hour, store=s)
+                           if s.has_transactions else None),
         }
         for zone in s.departments
     ]
@@ -284,15 +329,17 @@ def _staffing(s, day):
 
 
 def _category_detail(s, category, hour):
-    """Everything the category pop-up shows."""
+    """Everything the category pop-up shows; None for parts the store's data can't support."""
+    has_stock = s.has_stock
     return {
         "pace": kpi.get_category_pace(hour=hour, category=category, store=s)[0],
-        "stock": stock.get_stock_status(category, hour=hour, store=s),
-        "health": stock.check_size_runs(category, hour=hour, store=s),
-        "history": stock.get_stock_history(category, hour=hour, store=s),
-        "cover": stock.get_days_of_cover(category, hour=hour, store=s),
-        "conversion": kpi.get_conversion_metrics(category=category, hour=hour, store=s),
-        "playbook": loyalty.get_tier_playbook(category, store=s),
+        "stock": stock.get_stock_status(category, hour=hour, store=s) if has_stock else None,
+        "health": stock.check_size_runs(category, hour=hour, store=s) if has_stock else None,
+        "history": stock.get_stock_history(category, hour=hour, store=s) if has_stock else None,
+        "cover": stock.get_days_of_cover(category, hour=hour, store=s) if has_stock else None,
+        "conversion": (kpi.get_conversion_metrics(category=category, hour=hour, store=s)
+                       if s.has_footfall and s.has_transactions else None),
+        "playbook": loyalty.get_tier_playbook(category, store=s) if s.has_loyalty else None,
     }
 
 
@@ -313,12 +360,14 @@ LOOKUPS = {
 }
 
 
-@st.cache_data(show_spinner=False)
+# Results are kept for an hour at most, so an uploaded store's figures don't
+# linger in the app's memory.
+@st.cache_data(show_spinner=False, ttl="1h")
 def _lookup(store_id, name, args, _store):
     return LOOKUPS[name](_store, *args)
 
 
-@st.cache_data(show_spinner="Working it out...")
+@st.cache_data(show_spinner="Working it out...", ttl="1h")
 def _slow_lookup(store_id, name, args, _store):
     return LOOKUPS[name](_store, *args)
 

@@ -184,8 +184,12 @@ def get_cross_sell_ideas(day=None, hour=None, statuses=("behind",), store=None):
             partner = partners[0]["category"] if partners else None
             idea.update(type="complement", partner=partner, lead_tier=best and best["tier"],
                         offer_type=best and best["preferred_offer_type"])
-            pairing = f"Pair it with {partner} as an outfit." if partner else \
-                "No complementary category is both selling well and in stock right now."
+            if partner:
+                pairing = f"Pair it with {partner} as an outfit."
+            elif store.has_stock:
+                pairing = "No complementary category is both selling well and in stock right now."
+            else:
+                pairing = "No complementary category is selling well right now."
 
             if stock_verdict == "broken_size_run":
                 h = health[category]

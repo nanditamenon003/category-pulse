@@ -8,7 +8,7 @@ Next / End tour; Next moves to the right page by itself.
 
 import streamlit as st
 
-from ui import ACCENT, esc, html_block
+from ui import ACCENT, current_store, esc, html_block, request_store
 
 TOUR = [
     {
@@ -76,7 +76,8 @@ PAGES = {}
 
 
 def start():
-    """Start the tour from the first stop, moving to its page if needed."""
+    """Start the tour from the first stop, on the demo store (the tour is written for it)."""
+    request_store(False)
     st.session_state["tour_step"] = 0
     st.switch_page(PAGES[TOUR[0]["page"]])
 
@@ -92,7 +93,7 @@ def _go(step):
 def render(current_page_title):
     """Draw the tour card (or a 'return to the tour' bar) at the top of the page."""
     step = st.session_state.get("tour_step")
-    if step is None:
+    if step is None or not current_store().is_demo:
         return
     stop = TOUR[step]
 

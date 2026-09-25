@@ -7,6 +7,7 @@ category detail and the chat. Only one pop-up can be open at a time, so
 "Ask the AI about this category" closes the detail and opens the chat.
 """
 
+import hashlib
 import json
 
 import altair as alt
@@ -15,8 +16,9 @@ import streamlit as st
 
 import agent
 import tour
+import upload
 from config import DEMO_QUESTION_LIMIT
-from store import WEEKDAY_NAMES
+from store import WEEKDAY_NAMES, StoreDataError
 from ui import (
     AMBER,
     BORDER,
@@ -50,6 +52,8 @@ from ui import (
     pill,
     playbook_for,
     progress_bar,
+    request_forget,
+    request_store,
     risky_sizes_at,
     slug,
     staffing_for,
@@ -77,7 +81,23 @@ STOCK_VERDICT = {
 }
 
 
+def _not_in_data(what, add):
+    """A plain note where a section needs data the store's upload didn't include."""
+    html_block(f'<div class="cp-panel"><p><b>Not in your data:</b> {esc(what)}. To see this, '
+               f'{esc(add)} (the Your data page has the template).</p></div>')
+
+
 # --- Today ---------------------------------------------------------------------------------
+
+def _your_store_note(s):
+    html_block(
+        '<div class="cp-panel"><div class="cp-panel-title">Your store</div>'
+        f'<p>Showing your uploaded data for {esc(s.month_name)} {s.month_start.year}, as at the '
+        f'close of day {s.today_day}. It\'s read for this session only and isn\'t saved, and the AI '
+        'chat and tour stay with the demo store. Switch between them at the top of the page.</p>'
+        '</div>'
+    )
+
 
 def _start_here():
     # Hidden once dismissed, and while the tour runs (the tour card does its job).
@@ -120,6 +140,13 @@ def _problem_row(p, diag):
     )
 
 
+def _when_dropped(alert):
+    """When a size hit its last piece: the hour if stock is counted hourly, else just 'today'."""
+    if len(current_store().stock_hours_by_day.get(alert["day"], [])) > 1:
+        return f"since {alert['hour']}:00-{alert['hour'] + 1}:00"
+    return "by today's close"
+
+
 def _compact_row(tone, title, text):
     return (f'<div class="cp-row {tone}"><div style="flex:1;min-width:0">'
             f'<div class="cp-row-text"><b>{esc(title)}</b>: {esc(text)}</div></div>'
@@ -128,8 +155,12 @@ def _compact_row(tone, title, text):
 
 def today_page():
     hour = current_hour()
-    page_title("Today", f"The store at {time_label(hour)} on day {current_store().today_day} of the month.")
-    _start_here()
+    s = current_store()
+    page_title("Today", f"The store at {time_label(hour)} on day {s.today_day} of the month.")
+    if s.is_demo:
+        _start_here()
+    else:
+        _your_store_note(s)
 
     pace = pace_at(hour)
     by_category = {p["category"]: p for p in pace}
@@ -163,8 +194,8 @@ def today_page():
 
     behind_names = {p["category"] for p in behind}
     stock_rows = [(r["category"], r["verdict"]) for r in stock_health_at(hour)
-                  if r["category"] not in behind_names]
-    core_pieces = [a for a in last_pieces_at(hour) if a["is_core_size"]]
+                  if r["category"] not in behind_names] if s.has_stock else []
+    core_pieces = [a for a in last_pieces_at(hour) if a["is_core_size"]] if s.has_stock else []
     if stock_rows or core_pieces:
         html_block(heading("Stock alerts"))
         for category, verdict in stock_rows:
@@ -173,8 +204,7 @@ def today_page():
                                       STOCK_VERDICT[verdict]), f"Open {category}"):
                 category_dialog(category)
         for a in core_pieces:
-            text = (f"last piece in {a['size']} (a core size), since "
-                    f"{a['hour']}:00-{a['hour'] + 1}:00")
+            text = f"last piece in {a['size']} (a core size), {_when_dropped(a)}"
             if clickable(f"piece_{slug(a['category'])}_{slug(a['size'])}",
                          _compact_row(STATUS[by_category[a["category"]]["status"]][1],
                                       a["category"], text), f"Open {a['category']}"):
@@ -215,7 +245,8 @@ def category_dialog(category):
     with sell:
         _sell_tab(category, detail, hour)
 
-    if st.button("Ask the AI about this category", icon=":material/forum:", key="ask_about"):
+    if current_store().is_demo and st.button("Ask the AI about this category", icon=":material/forum:",
+                                             key="ask_about"):
         status_word = STATUS[p["status"]][0].lower()
         st.session_state["chat_pending"] = (f"{category} is {status_word} this month. Why, and what "
                                             f"should the floor team do about it?")
@@ -275,11 +306,20 @@ def _size_chart(stock_status):
 
 
 def _stock_tab(category, detail):
+    if detail["stock"] is None:
+        _not_in_data("stock counts", "add a Stock sheet")
+        return
+    s = current_store()
     health, status, history, cover = detail["health"], detail["stock"], detail["history"], detail["cover"]
+    usual = (f", {health['total_as_pct_of_usual']}% of its usual level"
+             if health["total_as_pct_of_usual"] is not None else "")
+    counted = status["stock_counted_at"]
+    when = (f" (counted on day {counted['day']})"
+            if counted and counted["day"] != status["as_of"]["day"] else "")
     html_block(f'<div class="cp-row-text"><b>{esc(STOCK_VERDICT[health["verdict"]])}</b> '
-               f'{status["total_remaining"]} units on the shelf, '
-               f'{health["total_as_pct_of_usual"]}% of its usual level.</div>')
-    st.altair_chart(_size_chart(status), width="stretch", theme=None)
+               f'{status["total_remaining"]} units on the shelf{usual}{when}.</div>')
+    if s.has_sizes:
+        st.altair_chart(_size_chart(status), width="stretch", theme=None)
 
     risky = [s for s in cover["sizes"] if s["likely_out_before_next_delivery"]]
     if risky:
@@ -288,6 +328,10 @@ def _stock_tab(category, detail):
                    f'the next delivery (day {cover["next_scheduled_delivery_day"]}).</div>')
 
     html_block(heading("Deliveries this month"))
+    if not s.has_stock_history:
+        html_block('<div class="cp-small">Stock was counted on only one day, so deliveries can\'t be '
+                   'worked out. A count at the close of every day shows them.</div>')
+        return
     events = [(d, f"**Day {d}: scheduled delivery never arrived**")
               for d in history["scheduled_deliveries_not_received"]]
     for d in history["deliveries_received"]:
@@ -302,6 +346,9 @@ def _stock_tab(category, detail):
 
 def _shoppers_tab(detail):
     c = detail["conversion"]
+    if c is None:
+        _not_in_data("visitor and bill counts", "add a Visitors sheet and Bills to the Sales sheet")
+        return
     recent, baseline = c["recent_last_3_days_and_today"], c["baseline_earlier_this_month"]
     change = c["visitors_change_vs_typical_pct"]
     html_block('<div class="cp-kpis">'
@@ -329,7 +376,10 @@ def _sell_tab(category, detail, hour):
                    'push for it. Here is how each loyalty tier responds, if you want one.</div>')
 
     html_block(heading("Loyalty tiers", "best responders first"))
-    _tier_table(detail["playbook"])
+    if detail["playbook"] is None:
+        _not_in_data("loyalty tier figures", "add a Loyalty sheet")
+    else:
+        _tier_table(detail["playbook"])
 
 
 def _tier_table(playbook):
@@ -505,8 +555,8 @@ def categories_page():
 def _stock_problem_text(r):
     core = " or ".join(r["core_sizes"])
     if r["verdict"] == "broken_size_run":
-        return (f"broken size run. No {core}, yet {r['total_remaining']} units sit on the shelf "
-                f"({r['total_as_pct_of_usual']}% of usual).")
+        usual = f" ({r['total_as_pct_of_usual']}% of usual)" if r["total_as_pct_of_usual"] is not None else ""
+        return f"broken size run. No {core}, yet {r['total_remaining']} units sit on the shelf{usual}."
     if r["verdict"] == "stockout":
         return ("sold out, nothing left in any size." if r["total_remaining"] == 0
                 else f"almost sold out, {r['total_remaining']} units left.")
@@ -516,11 +566,16 @@ def _stock_problem_text(r):
 def stock_page():
     hour = current_hour()
     page_title("Stock", "What's on the shelf, what's missing, and what's about to run out.")
+    s = current_store()
+    if not s.has_stock:
+        _not_in_data("stock counts", "add a Stock sheet with units on hand by category and size")
+        return
     pace = {p["category"]: p for p in pace_at(hour)}
     problems = stock_health_at(hour)
     pieces = last_pieces_at(hour)
     risky, next_delivery = risky_sizes_at(hour)
-    delivery_weekday = WEEKDAY_NAMES[current_store().weekday(next_delivery)] if next_delivery else ""
+    delivery_weekday = WEEKDAY_NAMES[s.weekday(next_delivery)] if next_delivery else ""
+    no_schedule = s.delivery_weekday is None
 
     html_block('<div class="cp-kpis">'
                + kpi_card("Stock problems", f"{len(problems)}", "stockouts and broken size runs",
@@ -528,8 +583,9 @@ def stock_page():
                + kpi_card("Last pieces today", f"{len(pieces)}",
                           f"{sum(a['is_core_size'] for a in pieces)} in core sizes")
                + kpi_card("Likely to run out", f"{len(risky)}", "sizes, before the next delivery")
-               + kpi_card("Next delivery", f"Day {next_delivery}" if next_delivery else "None",
-                          delivery_weekday)
+               + kpi_card("Next delivery", "Not set" if no_schedule else
+                          (f"Day {next_delivery}" if next_delivery else "None this month"),
+                          "add a Delivery day in Settings" if no_schedule else delivery_weekday)
                + "</div>")
 
     html_block(heading("Stock problems", "tap for sizes and deliveries"))
@@ -546,7 +602,7 @@ def stock_page():
         html_block('<div class="cp-panel"><p>No size has dropped to its last piece today.</p></div>')
     for a in pieces:
         kind = "a core size" if a["is_core_size"] else "not a core size"
-        text = f"last one left in {a['size']} ({kind}), since {a['hour']}:00-{a['hour'] + 1}:00"
+        text = f"last one left in {a['size']} ({kind}), {_when_dropped(a)}"
         tone = STATUS[pace[a["category"]]["status"]][1]
         if clickable(f"lp_{slug(a['category'])}_{slug(a['size'])}", _compact_row(tone, a["category"], text),
                      f"Open {a['category']}"):
@@ -554,7 +610,9 @@ def stock_page():
 
     html_block(heading("Likely to run out before the next delivery",
                        "a projection from each size's selling rate over the last 7 days"))
-    if not risky:
+    if no_schedule:
+        _not_in_data("the weekday deliveries arrive", "add a Delivery day in the Settings sheet")
+    elif not risky:
         html_block('<div class="cp-panel"><p>No size looks likely to run out before the next '
                    'delivery.</p></div>')
     else:
@@ -608,17 +666,41 @@ def floor_page():
     hour = current_hour()
     page_title("Floor and staff", "Who's coming in, how many are buying, and where to put the team "
                                   "tomorrow.")
+    s = current_store()
+    if not s.has_footfall:
+        _not_in_data("visitor counts", "add a Visitors sheet with visitors per floor, by day or hour")
+        return
     zones = zones_at(hour)
+
+    def typical(f):
+        if f["typical_visitors_by_this_hour"] is None:
+            return "no earlier days of this kind yet"
+        change = f" ({f['pct_vs_typical']:+.0f}%)" if f["pct_vs_typical"] is not None else ""
+        return f"typical {f['typical_visitors_by_this_hour']:.0f}{change}"
 
     html_block(heading("Visitors today", f"by {time_label(hour)}, vs a typical day of the same kind")
                + '<div class="cp-kpis">'
-               + "".join(
-                   kpi_card(z["footfall"]["zone"], f"{z['footfall']['visitors_today_so_far']}",
-                            f"typical {z['footfall']['typical_visitors_by_this_hour']:.0f} "
-                            f"({z['footfall']['pct_vs_typical']:+.0f}%)")
-                   for z in zones)
+               + "".join(kpi_card(z["footfall"]["zone"], f"{z['footfall']['visitors_today_so_far']}",
+                                  typical(z["footfall"]))
+                         for z in zones)
                + "</div>")
 
+    if not s.has_transactions:
+        _not_in_data("bill counts, needed to tell fewer visitors from fewer buyers",
+                     "add Bills to the Sales sheet")
+    else:
+        _visitors_vs_buyers(zones)
+
+    if not s.has_visitor_hours:
+        _not_in_data("visitors by hour, needed for tomorrow's busy hours",
+                     "add an Hour column to the Visitors sheet")
+        return
+    if s.today_day >= s.days_in_month:
+        return
+    _tomorrow(s)
+
+
+def _visitors_vs_buyers(zones):
     html_block(heading("Visitors vs buyers", "last 3 days + today, vs the first half of the month")
                + '<div class="cp-kpis">'
                + "".join(
@@ -629,7 +711,9 @@ def floor_page():
                    for z in zones)
                + "</div>")
 
-    rec, patterns = staffing_for(current_store().today_day + 1)
+
+def _tomorrow(s):
+    rec, patterns = staffing_for(s.today_day + 1)
     html_block(heading(f"Tomorrow: {rec['weekday']}",
                        f"from the last {len(rec['based_on_days'])} {rec['day_type']}s"))
     for note in rec["notes"]:
@@ -638,7 +722,9 @@ def floor_page():
     columns = st.columns(len(patterns))
     for column, (zone, pattern) in zip(columns, patterns.items()):
         with column:
-            reliability = "" if pattern["reliability"] == "good" else " (rough guide: low traffic)"
+            # e.g. "rough guide (low traffic)" -> " (rough guide: low traffic)"
+            note = pattern["reliability"].replace(" (", ": ").rstrip(")")
+            reliability = "" if pattern["reliability"] == "good" else f" ({note})"
             html_block(f'<div class="cp-row-name">{esc(zone)}</div>'
                        f'<div class="cp-small">Peaks {esc(", ".join(pattern["peak_windows"]))}'
                        f'{esc(reliability)}</div>')
@@ -681,6 +767,9 @@ def sell_page():
             category_dialog(category)
 
     html_block(heading("Loyalty tier playbook", "pick any category"))
+    if not current_store().has_loyalty:
+        _not_in_data("loyalty tier figures", "add a Loyalty sheet")
+        return
     options = list(ideas) + [c for c in current_store().categories if c not in ideas]
     chosen = st.selectbox("Category", options, key="sell_category", label_visibility="collapsed")
     _tier_table(playbook_for(chosen))
@@ -688,7 +777,10 @@ def sell_page():
     with st.expander("Best-responding tier for every category"):
         best = []
         for category in current_store().categories:
-            top = playbook_for(category)["tiers_ranked_by_response"][0]
+            tiers = playbook_for(category)["tiers_ranked_by_response"]
+            if not tiers:
+                continue
+            top = tiers[0]
             best.append({"Category": category, "Best tier": top["tier"],
                          "Takes up cross-sells": f"{top['cross_sell_response_rate_pct']:.0f}%",
                          "Offer at the till": top["offer_at_the_till"]})
@@ -730,7 +822,9 @@ def summary_page():
     ]
     lines.append({"Line": "Store", "Department": "", "Units": report["store_units"],
                   "Units share": "100%", "Value": inr(report["store_value"]), "Value share": "100%"})
-    st.dataframe(pd.DataFrame(lines), hide_index=True, width="stretch")
+    value_columns = [] if s.has_value else ["Value", "Value share", "Value (INR)"]
+    st.dataframe(pd.DataFrame(lines).drop(columns=value_columns, errors="ignore"),
+                 hide_index=True, width="stretch")
 
     categories = [
         {
@@ -744,7 +838,8 @@ def summary_page():
         for l in report["lines"] for c in l["categories"]
     ]
     with st.expander("Every category"):
-        st.dataframe(pd.DataFrame(categories), hide_index=True, width="stretch",
+        st.dataframe(pd.DataFrame(categories).drop(columns=value_columns, errors="ignore"),
+                     hide_index=True, width="stretch",
                      column_config={
                          "Units share": st.column_config.NumberColumn(format="%.1f%%"),
                          "Value (INR)": st.column_config.NumberColumn(format="localized"),
@@ -754,6 +849,135 @@ def summary_page():
                        data=pd.DataFrame(categories).to_csv(index=False),
                        file_name=f"category-pulse-contribution-day{s.today_day}-{moment}.csv",
                        mime="text/csv")
+
+
+# --- Your data page ----------------------------------------------------------------------------
+
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _read_upload(files):
+    """Reads uploaded files into a store (or a plain error) and keeps the result for this session."""
+    try:
+        store, notes = upload.read_upload(files)
+        st.session_state["upload_result"] = {"ok": True, "store": store, "notes": notes}
+    except StoreDataError as e:
+        st.session_state["upload_result"] = {"ok": False, "error": str(e)}
+
+
+def _feature_row(name, on, hint):
+    badge = '<span class="cp-pill green">On</span>' if on else '<span class="cp-pill neutral">Off</span>'
+    extra = f' <span class="cp-small">({esc(hint)})</span>' if hint else ""
+    return f'<div class="cp-term">{badge} {esc(name)}{extra}</div>'
+
+
+def _upload_preview(store, notes):
+    html_block(heading("3. Check it", "before switching every page to it"))
+    lines, floors = len(store.lines), len(store.departments)
+    html_block('<div class="cp-kpis">'
+               + kpi_card("Month", f"{store.month_name} {store.month_start.year}",
+                          f"data up to day {store.today_day} ({store.date(store.today_day):%a %d %b})")
+               + kpi_card("Categories", f"{len(store.categories)}",
+                          f"in {lines} line{'s' if lines != 1 else ''} on {floors} floor{'s' if floors != 1 else ''}")
+               + kpi_card("Units sold so far", f"{int(store.sales['units_sold'].sum()):,}",
+                          f"against {sum(store.targets.values()):,} for the month")
+               + "</div>")
+
+    html_block(heading("What your data switches on")
+               + '<div class="cp-panel">'
+               + "".join(_feature_row(*f) for f in upload.feature_checklist(store))
+               + "</div>")
+    for note in notes:
+        html_block(f'<div class="cp-small">{esc(note)}</div>')
+
+    if store.has_sizes:
+        with st.expander("Check the core sizes"):
+            html_block('<div class="cp-small">Core sizes are the ones most shoppers need: when they run '
+                       'out, a category can\'t sell even while the shelf looks full. Any left blank in '
+                       'the Targets sheet were worked out from sales on days every size was in stock. '
+                       'With only a few sales that can pick the wrong ones, so check them and type the '
+                       'right ones into the template if needed.</div>')
+            st.dataframe(pd.DataFrame([
+                {"Category": c, "Sizes": ", ".join(store.sizes[c]),
+                 "Core sizes": ", ".join(store.core_sizes[c]) or "none yet (no sales)"}
+                for c in store.categories
+            ]), hide_index=True, width="stretch")
+
+    if st.session_state.get("my_store") is store:
+        html_block('<div class="cp-small" style="margin-top:8px">This is the store loaded above.</div>')
+    elif st.button("Show my store", key="show_upload", type="primary", icon=":material/arrow_forward:"):
+        st.session_state["my_store"] = store
+        request_store(True)
+        st.switch_page(tour.PAGES["Today"])
+
+
+def your_data_page():
+    page_title("Your data", "See your own store in Category Pulse: fill in the Excel template, upload "
+                            "it, and every page switches to your numbers.")
+    html_block('<div class="cp-panel"><p><b>Before you upload:</b> this is a public demo, so only use '
+               'real company figures with your manager\'s approval. Your file is read for this '
+               'session only and isn\'t saved, and the AI chat is switched off for uploaded data.'
+               '</p></div>')
+
+    mine = st.session_state.get("my_store")
+    if mine is not None:
+        showing = not current_store().is_demo
+        html_block(heading("Your store")
+                   + f'<div class="cp-panel"><p><b>{esc(mine.name)}</b>: {esc(mine.month_name)} '
+                     f'{mine.month_start.year}, up to day {mine.today_day}. '
+                   + ("Every page is showing it now." if showing
+                      else "Loaded, but the pages are showing the demo store.")
+                   + "</p></div>")
+        with st.container(horizontal=True, gap="small", vertical_alignment="center"):
+            if showing:
+                if st.button("Back to the demo", key="mine_to_demo"):
+                    request_store(False)
+                    st.rerun()
+            elif st.button("Show my store", key="mine_show", type="primary"):
+                request_store(True)
+                st.switch_page(tour.PAGES["Today"])
+            if st.button("Remove my data", key="mine_forget", type="tertiary"):
+                request_forget()
+                st.rerun()
+
+    html_block(heading("1. Get the template")
+               + '<div class="cp-panel"><p>One Excel file with a sheet for each kind of data. '
+                 '<b>Targets</b> and <b>Sales</b> are required. <b>Stock</b>, <b>Visitors</b>, '
+                 '<b>Loyalty</b> and <b>Settings</b> are optional, and each one switches on more of '
+                 'the app. The Read me sheet explains every column. The sample is the demo store\'s '
+                 'May, filled in, so you can see exactly what goes where.</p></div>')
+    with st.container(horizontal=True, gap="small", wrap=True):
+        st.download_button("Download the template", data=upload.template_bytes(), mime=XLSX,
+                           file_name="category-pulse-template.xlsx", icon=":material/download:")
+        with st.spinner("Preparing the sample..."):
+            sample = upload.sample_bytes()
+        st.download_button("Download the sample (demo May)", data=sample, mime=XLSX,
+                           file_name="category-pulse-sample-may.xlsx", icon=":material/download:")
+
+    html_block(heading("2. Upload it", "the filled-in template, or one CSV file per sheet, e.g. sales.csv"))
+    files = st.file_uploader("Upload your data", type=["xlsx", "csv"], accept_multiple_files=True,
+                             key="upload_files", label_visibility="collapsed")
+    if files:
+        data = [(f.name, f.getvalue()) for f in files]
+        fingerprint = hashlib.sha1(b"".join(d for _, d in data)).hexdigest()
+        if st.session_state.get("upload_key") != fingerprint:  # read each new upload once
+            st.session_state["upload_key"] = fingerprint
+            with st.spinner("Reading your file..."):
+                _read_upload(data)
+    if st.button("Or try it with the sample file", key="try_sample", icon=":material/science:",
+                 type="tertiary"):
+        with st.spinner("Reading the sample..."):
+            _read_upload([("category-pulse-sample-may.xlsx", sample)])
+
+    result = st.session_state.get("upload_result")
+    if result is None:
+        return
+    if not result["ok"]:
+        html_block('<div class="cp-alert"><div class="cp-alert-title">That file can\'t be used yet</div>'
+                   f'<ul><li>{esc(result["error"])}</li><li>Fix it in the file and upload it again.'
+                   '</li></ul></div>')
+        return
+    _upload_preview(result["store"], result["notes"])
 
 
 # --- Guide page ------------------------------------------------------------------------------
@@ -817,6 +1041,13 @@ def guide_page():
                + "".join(f'<div class="cp-term"><b>{esc(term)}:</b> {esc(text)}</div>'
                          for term, text in GUIDE_TERMS)
                + "</div>")
+
+    html_block(heading("Using your own store's data")
+               + '<div class="cp-panel"><p>The Your data page has an Excel template. Fill in your '
+                 'targets and sales (and, if you have them, stock counts, visitor counts and loyalty '
+                 'figures), upload it, and every page switches to your store. The more you add, the '
+                 'more the app can tell you; it says plainly what\'s missing rather than guessing. The '
+                 'AI chat and the tour stay with the demo store.</p></div>')
 
     html_block(heading("How the AI chat works")
                + '<div class="cp-panel"><p>Ask Category Pulse answers by looking up the store\'s '
