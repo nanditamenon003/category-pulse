@@ -166,6 +166,13 @@ header[data-testid="stHeader"] {{ background: {PAGE}; border-bottom: 1px solid {
 [class*="st-key-click_cat_"] .cp-card {{ height: 100%; }}
 .cp-showing {{ font-size: 13px; color: {MUTED}; margin: 6px 0 4px; }}
 
+/* The end-of-day summary, set for easy reading. */
+.cp-digest {{ background: {CARD}; border: 1px solid {BORDER}; border-radius: 8px; padding: 18px 22px;
+             max-width: 760px; }}
+.cp-digest p {{ font-size: 16px; line-height: 1.65; color: {TEXT}; margin: 0 0 12px; }}
+.cp-digest p:last-child {{ margin-bottom: 0; }}
+.cp-check {{ font-size: 13px; color: {MUTED}; margin: 4px 0 8px; }}
+
 /* Text links (tertiary buttons) use the accent colour; pop-up bullets a touch smaller. */
 .stButton button[kind="tertiary"], .stButton button[kind="tertiary"] p {{ color: {ACCENT}; }}
 [role="dialog"] li, [role="dialog"] li p {{ font-size: 14px; }}
@@ -251,6 +258,26 @@ def digest_at(hour):
 def diagnoses_at(hour):
     """Likely cause, evidence and action for every category, keyed by category."""
     return {d["category"]: d for d in diagnosis.diagnose_store(TODAY_DAY, hour, data=load_data())}
+
+
+@st.cache_data(show_spinner=False)
+def contribution_at(hour):
+    return kpi.get_contribution(TODAY_DAY, hour, sales_df=load_data()["sales_df"])
+
+
+def inr(value):
+    """Rupees with Indian digit grouping, e.g. 5432440 -> '₹54,32,440'."""
+    digits = str(int(round(value)))
+    if len(digits) <= 3:
+        return f"₹{digits}"
+    head, tail = digits[:-3], digits[-3:]
+    groups = []
+    while len(head) > 2:
+        groups.insert(0, head[-2:])
+        head = head[:-2]
+    if head:
+        groups.insert(0, head)
+    return "₹" + ",".join(groups) + "," + tail
 
 
 @st.cache_data(show_spinner=False)

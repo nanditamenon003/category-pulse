@@ -29,6 +29,8 @@ from ui import (
     category_detail_at,
     cause_chip,
     clickable,
+    contribution_at,
+    inr,
     cross_sell_at,
     current_hour,
     diagnoses_at,
@@ -445,13 +447,22 @@ def categories_page():
     pace = pace_at(hour)
     diags = diagnoses_at(hour)
 
-    with st.container(horizontal=True, wrap=True, vertical_alignment="bottom", gap="medium"):
-        department = st.segmented_control("Department", DEPARTMENT_FILTER, default="All",
-                                          key="cat_department") or "All"
-        statuses = st.pills("Status", list(STATUS_FILTER), selection_mode="multi", key="cat_status")
-        sort = st.selectbox("Sort", list(SORT_ORDERS), key="cat_sort", width=170)
+    # Filters live in a compact "Filters" button so they don't push the cards down on a
+    # phone. Its label counts the filters that are on, read from the previous run.
+    active = sum([
+        (st.session_state.get("cat_department") or "All") != "All",
+        bool(st.session_state.get("cat_status")),
+        st.session_state.get("cat_sort", "By line") != "By line",
+    ])
+    with st.container(horizontal=True, wrap=True, vertical_alignment="center", gap="small"):
+        with st.popover(f"Filters · {active} on" if active else "Filters", icon=":material/tune:"):
+            department = st.segmented_control("Department", DEPARTMENT_FILTER, default="All",
+                                              key="cat_department") or "All"
+            statuses = st.pills("Status", list(STATUS_FILTER), selection_mode="multi",
+                                key="cat_status")
+            sort = st.selectbox("Sort", list(SORT_ORDERS), key="cat_sort")
         view = st.segmented_control("View", ["Cards", "Table", "Chart"], default="Cards",
-                                    key="cat_view") or "Cards"
+                                    key="cat_view", label_visibility="collapsed") or "Cards"
 
     wanted = {STATUS_FILTER[s] for s in statuses} if statuses else set(STATUS_FILTER.values())
     shown = [p for p in pace
@@ -680,10 +691,60 @@ def sell_page():
 def summary_page():
     hour = current_hour()
     is_close = hour == STORE_HOURS[-1]
+    moment = "close" if is_close else time_label(hour).replace(":", "")
     page_title("End-of-day summary" if is_close else "Summary so far today",
-               "A short plain-English summary that replaces the evening spreadsheet.")
-    for paragraph in digest_at(hour).split("\n\n"):
-        st.markdown(paragraph)
+               "The plain-English summary that replaces the evening spreadsheet, and the month's "
+               "contribution report.")
+
+    text = digest_at(hour)
+    html_block('<div class="cp-digest">'
+               + "".join(f"<p>{esc(p)}</p>" for p in text.split("\n\n")) + "</div>")
+    st.download_button("Download summary", data=text, icon=":material/download:",
+                       file_name=f"category-pulse-summary-day{TODAY_DAY}-{moment}.txt",
+                       mime="text/plain")
+
+    report = contribution_at(hour)
+    html_block(heading("May contribution, month to date", f"as of day {TODAY_DAY}, {time_label(hour)}")
+               + '<div class="cp-check">Totals checked automatically: '
+               + esc("; ".join(report["checks_passed"])) + ".</div>")
+
+    lines = [
+        {
+            "Line": l["line"],
+            "Department": l["department"],
+            "Units": l["units"],
+            "Units share": f"{l['units_pct']}%",
+            "Value": inr(l["value"]),
+            "Value share": f"{l['value_pct']}%",
+        }
+        for l in report["lines"]
+    ]
+    lines.append({"Line": "Store", "Department": "", "Units": report["store_units"],
+                  "Units share": "100%", "Value": inr(report["store_value"]), "Value share": "100%"})
+    st.dataframe(pd.DataFrame(lines), hide_index=True, width="stretch")
+
+    categories = [
+        {
+            "Line": l["line"],
+            "Category": c["product_type"],
+            "Units": c["units"],
+            "Units share": c["units_pct"],
+            "Value (INR)": c["value"],
+            "Value share": c["value_pct"],
+        }
+        for l in report["lines"] for c in l["categories"]
+    ]
+    with st.expander("Every category"):
+        st.dataframe(pd.DataFrame(categories), hide_index=True, width="stretch",
+                     column_config={
+                         "Units share": st.column_config.NumberColumn(format="%.1f%%"),
+                         "Value (INR)": st.column_config.NumberColumn(format="localized"),
+                         "Value share": st.column_config.NumberColumn(format="%.1f%%"),
+                     })
+    st.download_button("Download contribution report (CSV)", icon=":material/download:",
+                       data=pd.DataFrame(categories).to_csv(index=False),
+                       file_name=f"category-pulse-contribution-day{TODAY_DAY}-{moment}.csv",
+                       mime="text/csv")
 
 
 # --- Chat pop-up -----------------------------------------------------------------------------
