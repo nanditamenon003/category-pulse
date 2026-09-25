@@ -3,62 +3,34 @@ Pace and KPI engine.
 
 Answers the question a store manager actually has mid-month: "is each
 category on track to hit its monthly target, and what will it take?"
-Everything here reads real numbers from the data files — nothing is guessed.
-Projections are clearly labelled as projections.
+Everything here reads real numbers from the store's data — nothing is
+guessed. Projections are clearly labelled as projections.
+
+Every function takes a `store` (see store.py); leave it out for the demo
+store. `day` and `hour` default to the store's latest day and current hour.
 """
 
 import math
-import os
-
-import pandas as pd
 
 from config import (
-    CATEGORIES,
-    CATEGORY_DEPARTMENT,
-    CATEGORY_LINE,
-    CATEGORY_PRODUCT,
     CONVERSION_DROP_PCT,
-    DAYS_IN_MONTH,
-    DEFAULT_CURRENT_HOUR,
-    DEPARTMENTS,
     DRIFTING_Z,
-    LAST_YEAR_UNITS,
-    LINES,
     MIN_EXPECTED_UNITS_FOR_STATUS,
     MIN_TRANSACTIONS_FOR_READING,
-    MONTHLY_TARGETS,
     NORMAL_VARIATION_Z,
     PACE_THRESHOLD_PCT,
     REQUIRED_RATE_STRETCH,
-    STORE_HOURS,
-    TODAY_DAY,
     TRAFFIC_DROP_PCT,
-    day_weight,
-    is_busy_day,
-    month_calendar,
 )
-
-DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
-SALES_PATH = os.path.join(DATA_DIR, "sales.csv")
-FOOTFALL_PATH = os.path.join(DATA_DIR, "footfall.csv")
+from store import resolve
 
 
-def load_sales_data():
-    """Loads the sales data from disk."""
-    return pd.read_csv(SALES_PATH)
-
-
-def load_footfall_data():
-    """Loads the footfall (visitor count) data from disk."""
-    return pd.read_csv(FOOTFALL_PATH)
-
-
-def _validate_moment(day, hour):
-    if not 1 <= day <= TODAY_DAY:
-        raise ValueError(f"day must be between 1 and {TODAY_DAY} (today), got {day}")
-    if hour not in STORE_HOURS:
+def _validate_moment(store, day, hour):
+    if not 1 <= day <= store.today_day:
+        raise ValueError(f"day must be between 1 and {store.today_day} (today), got {day}")
+    if hour not in store.hours:
         raise ValueError(
-            f"hour must be a store hour between {STORE_HOURS[0]} and {STORE_HOURS[-1]}, got {hour}"
+            f"hour must be a store hour between {store.hours[0]} and {store.hours[-1]}, got {hour}"
         )
 
 
@@ -67,7 +39,7 @@ def _as_of(df, day, hour):
     return df[(df["day"] < day) | ((df["day"] == day) & (df["hour"] <= hour))]
 
 
-def typical_share_of_day_sold(sales_df, day, hour):
+def typical_share_of_day_sold(store, day, hour):
     """
     What share of a normal day's units has usually sold by the end of `hour`,
     learned from this month's own history: past days of the same kind as
@@ -76,10 +48,11 @@ def typical_share_of_day_sold(sales_df, day, hour):
     Learned from the data rather than assumed, so it works the same on real
     store exports. Falls back to an even spread if there's no history yet.
     """
-    history = sales_df[sales_df["day"].isin(_similar_past_days(day))]
-    by_hour = history.groupby("hour")["units_sold"].sum().reindex(STORE_HOURS, fill_value=0)
+    sales = store.sales
+    history = sales[sales["day"].isin(_similar_past_days(store, day))]
+    by_hour = history.groupby("hour")["units_sold"].sum().reindex(store.hours, fill_value=0)
     if by_hour.sum() == 0:
-        return (STORE_HOURS.index(hour) + 1) / len(STORE_HOURS)
+        return (store.hours.index(hour) + 1) / len(store.hours)
     return float(by_hour.cumsum()[hour] / by_hour.sum())
 
 
@@ -116,8 +89,7 @@ def classify_pace(expected, actual):
     return status, pct, beyond_noise
 
 
-def get_category_pace(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, category=None, line=None,
-                      sales_df=None):
+def get_category_pace(day=None, hour=None, category=None, line=None, store=None):
     """
     Month-to-date pace for every category (or one category, or one line), as
     of `hour` on `day`.
@@ -130,26 +102,25 @@ def get_category_pace(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, category=None, l
     Returns a list of dicts with actuals, the expected pace, a status, and
     clearly-labelled projections for the rest of the month.
     """
-    _validate_moment(day, hour)
-    if sales_df is None:
-        sales_df = load_sales_data()
+    store, day, hour = resolve(store, day, hour)
+    _validate_moment(store, day, hour)
 
-    days_elapsed = (day - 1) + typical_share_of_day_sold(sales_df, day, hour)
-    days_remaining = DAYS_IN_MONTH - days_elapsed
-    sold_by_category = _as_of(sales_df, day, hour).groupby("category")["units_sold"].sum()
+    days_elapsed = (day - 1) + typical_share_of_day_sold(store, day, hour)
+    days_remaining = store.days_in_month - days_elapsed
+    sold_by_category = _as_of(store.sales, day, hour).groupby("category")["units_sold"].sum()
 
     selected = [
-        c for c in CATEGORIES
-        if (category is None or c == category) and (line is None or CATEGORY_LINE[c] == line)
+        c for c in store.categories
+        if (category is None or c == category) and (line is None or store.category_line[c] == line)
     ]
     if not selected:
         raise ValueError(f"No category matches category={category!r}, line={line!r}")
 
     results = []
     for cat in selected:
-        target = MONTHLY_TARGETS[cat]
+        target = store.targets[cat]
         sold = int(sold_by_category.get(cat, 0))
-        expected = target * days_elapsed / DAYS_IN_MONTH
+        expected = target * days_elapsed / store.days_in_month
         status, pct, beyond_noise = classify_pace(expected, sold)
 
         actual_per_day = sold / days_elapsed
@@ -159,11 +130,11 @@ def get_category_pace(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, category=None, l
 
         results.append({
             "category": cat,
-            "line": CATEGORY_LINE[cat],
-            "department": CATEGORY_DEPARTMENT[cat],
+            "line": store.category_line[cat],
+            "department": store.category_department[cat],
             "as_of": {"day": day, "hour": hour},
             "monthly_target": target,
-            "last_year_units": LAST_YEAR_UNITS[cat],
+            "last_year_units": store.last_year.get(cat),
             "units_sold_so_far": sold,
             "balance_to_do": sold - target,
             "expected_units_by_now": round(expected, 1),
@@ -182,7 +153,7 @@ def get_category_pace(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, category=None, l
     return results
 
 
-def get_contribution(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, sales_df=None):
+def get_contribution(day=None, hour=None, store=None):
     """
     The automated version of the store's contribution report: units and value
     sold month-to-date by line and category, each as a share of the store.
@@ -192,11 +163,10 @@ def get_contribution(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, sales_df=None):
     total, and shares must add up to 100%. A manual spreadsheet can silently
     drop rows from a SUM; this report refuses to.
     """
-    _validate_moment(day, hour)
-    if sales_df is None:
-        sales_df = load_sales_data()
+    store, day, hour = resolve(store, day, hour)
+    _validate_moment(store, day, hour)
 
-    period = _as_of(sales_df, day, hour)
+    period = _as_of(store.sales, day, hour)
     by_category = period.groupby("category")[["units_sold", "value"]].sum()
     store_units = int(period["units_sold"].sum())
     store_value = float(period["value"].sum())
@@ -205,14 +175,14 @@ def get_contribution(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, sales_df=None):
         return part / whole * 100 if whole else 0.0
 
     lines = []
-    for line in LINES:
+    for line, department in store.lines.items():
         categories = []
-        for cat in (c for c in CATEGORIES if CATEGORY_LINE[c] == line):
+        for cat in store.categories_in(line=line):
             units = int(by_category["units_sold"].get(cat, 0))
             value = float(by_category["value"].get(cat, 0.0))
             categories.append({
                 "category": cat,
-                "product_type": CATEGORY_PRODUCT[cat],
+                "product_type": store.category_product[cat],
                 "units": units,
                 "value": round(value),
                 "units_pct": round(share(units, store_units), 1),
@@ -222,7 +192,7 @@ def get_contribution(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, sales_df=None):
         line_value = sum(float(by_category["value"].get(c["category"], 0.0)) for c in categories)
         lines.append({
             "line": line,
-            "department": LINES[line],
+            "department": department,
             "units": line_units,
             "value": round(line_value),
             "units_pct": round(share(line_units, store_units), 1),
@@ -253,40 +223,42 @@ def get_contribution(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, sales_df=None):
     }
 
 
-def _similar_past_days(day):
+def _similar_past_days(store, day):
     """Earlier days this month of the same kind as `day` (busy vs normal)."""
-    calendar = {d["day"]: d for d in month_calendar()}
-    busy = is_busy_day(calendar[day])
-    return [d for d in range(1, day) if is_busy_day(calendar[d]) == busy]
+    busy = store.is_busy(day)
+    return [d for d in range(1, day) if store.is_busy(d) == busy]
 
 
-def get_footfall(zone=None, category=None, line=None, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR,
-                 footfall_df=None):
+def _zone_for(store, zone, category, line):
+    if zone is None and category is not None:
+        zone = store.category_department[category]
+    if zone is None and line is not None:
+        zone = store.lines[line]
+    if zone not in store.departments:
+        raise ValueError(f"zone must be one of {store.departments} (or give a category/line)")
+    return zone
+
+
+def get_footfall(zone=None, category=None, line=None, day=None, hour=None, store=None):
     """
-    Visitors to a floor zone (Menswear / Womenswear / Kidswear) so far today,
-    compared with a typical day of the same kind by the same hour, plus the
-    daily totals for the last 7 days. Pass a zone, or a category/line to use
-    the zone it sits in.
+    Visitors to a floor zone (e.g. Menswear / Womenswear / Kidswear) so far
+    today, compared with a typical day of the same kind by the same hour,
+    plus the daily totals for the last 7 days. Pass a zone, or a
+    category/line to use the zone it sits in.
 
     Used with pace and conversion to tell a traffic problem (fewer visitors
     than usual) apart from a conversion problem (normal visitors, but sales
     still collapsed — usually stock, sizing, price or service).
     """
-    _validate_moment(day, hour)
-    if footfall_df is None:
-        footfall_df = load_footfall_data()
+    store, day, hour = resolve(store, day, hour)
+    _validate_moment(store, day, hour)
+    store.require("footfall")
+    zone = _zone_for(store, zone, category, line)
 
-    if zone is None and category is not None:
-        zone = CATEGORY_DEPARTMENT[category]
-    if zone is None and line is not None:
-        zone = LINES[line]
-    if zone not in DEPARTMENTS:
-        raise ValueError(f"zone must be one of {DEPARTMENTS} (or give a category/line)")
-
-    ff = footfall_df[footfall_df["zone"] == zone]
+    ff = store.footfall[store.footfall["zone"] == zone]
     today = int(ff[(ff["day"] == day) & (ff["hour"] <= hour)]["visitors"].sum())
 
-    similar = _similar_past_days(day)
+    similar = _similar_past_days(store, day)
     by_this_hour = ff[ff["day"].isin(similar) & (ff["hour"] <= hour)].groupby("day")["visitors"].sum()
     typical = float(by_this_hour.mean()) if len(by_this_hour) else None
 
@@ -303,7 +275,7 @@ def get_footfall(zone=None, category=None, line=None, day=TODAY_DAY, hour=DEFAUL
     }
 
 
-def get_today_pace(line=None, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, sales_df=None):
+def get_today_pace(line=None, day=None, hour=None, store=None):
     """
     Today, hour by hour, for each line (or one line). Tracked at line level,
     not category level, because most single categories sell only a few units
@@ -314,31 +286,29 @@ def get_today_pace(line=None, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, sales_df
     today's target x the share of a typical day that has usually sold by this
     hour, learned from this month's history.
     """
-    _validate_moment(day, hour)
-    if sales_df is None:
-        sales_df = load_sales_data()
+    store, day, hour = resolve(store, day, hour)
+    _validate_moment(store, day, hour)
 
-    calendar = month_calendar()
-    today_info = calendar[day - 1]
-    today_share_of_month = day_weight(today_info) / sum(day_weight(d) for d in calendar)
-    share_by_now = typical_share_of_day_sold(sales_df, day, hour)
+    today_share_of_month = store.day_weight(day) / sum(store.day_weights.values())
+    share_by_now = typical_share_of_day_sold(store, day, hour)
 
-    today_sales = sales_df[(sales_df["day"] == day) & (sales_df["hour"] <= hour)]
+    sales = store.sales
+    today_sales = sales[(sales["day"] == day) & (sales["hour"] <= hour)]
     sold_by_line = today_sales.groupby("line")["units_sold"].sum()
 
-    lines = [line] if line is not None else list(LINES)
+    lines = [line] if line is not None else list(store.lines)
     results = []
     for ln in lines:
-        if ln not in LINES:
-            raise ValueError(f"Unknown line {ln!r}; lines are {list(LINES)}")
-        line_target = sum(MONTHLY_TARGETS[c] for c in CATEGORIES if CATEGORY_LINE[c] == ln)
+        if ln not in store.lines:
+            raise ValueError(f"Unknown line {ln!r}; lines are {list(store.lines)}")
+        line_target = sum(store.targets[c] for c in store.categories_in(line=ln))
         target_today = line_target * today_share_of_month
         expected = target_today * share_by_now
         sold = int(sold_by_line.get(ln, 0))
         status, pct, beyond_noise = classify_pace(expected, sold)
         results.append({
             "line": ln,
-            "department": LINES[ln],
+            "department": store.lines[ln],
             "as_of": {"day": day, "hour": hour},
             "target_today": round(target_today, 1),
             "units_sold_today": sold,
@@ -354,8 +324,7 @@ def _pct_change(new, old):
     return round((new - old) / old * 100, 1) if old else None
 
 
-def get_conversion_metrics(category=None, line=None, zone=None, day=TODAY_DAY,
-                           hour=DEFAULT_CURRENT_HOUR, sales_df=None, footfall_df=None):
+def get_conversion_metrics(category=None, line=None, zone=None, day=None, hour=None, store=None):
     """
     Conversion rate and units per transaction (UPT) for a category, a line or
     a whole floor zone, and a plain reading of whether a slowdown is a
@@ -373,30 +342,27 @@ def get_conversion_metrics(category=None, line=None, zone=None, day=TODAY_DAY,
     typical day of the same kind (weekday vs weekend/sale day) brought in the
     baseline, so a weekend-heavy stretch isn't mistaken for a traffic change.
     """
-    _validate_moment(day, hour)
-    if sales_df is None:
-        sales_df = load_sales_data()
-    if footfall_df is None:
-        footfall_df = load_footfall_data()
+    store, day, hour = resolve(store, day, hour)
+    _validate_moment(store, day, hour)
+    store.require("footfall")
+    store.require("transactions")
 
     if category is not None:
         categories, label = [category], category
-        zone = CATEGORY_DEPARTMENT[category]
+        zone = store.category_department[category]
     elif line is not None:
-        if line not in LINES:
-            raise ValueError(f"Unknown line {line!r}; lines are {list(LINES)}")
-        categories, label = [c for c in CATEGORIES if CATEGORY_LINE[c] == line], line
-        zone = LINES[line]
-    elif zone in DEPARTMENTS:
-        categories, label = [c for c in CATEGORIES if CATEGORY_DEPARTMENT[c] == zone], zone
+        if line not in store.lines:
+            raise ValueError(f"Unknown line {line!r}; lines are {list(store.lines)}")
+        categories, label = store.categories_in(line=line), line
+        zone = store.lines[line]
+    elif zone in store.departments:
+        categories, label = store.categories_in(department=zone), zone
     else:
-        raise ValueError(f"Give a category, a line, or a zone from {DEPARTMENTS}")
+        raise ValueError(f"Give a category, a line, or a zone from {store.departments}")
 
-    # Transactions are repeated on each size row of a category-hour: count once.
-    per_category_hour = sales_df[sales_df["category"].isin(categories)].groupby(
-        ["day", "hour", "category"]
-    ).agg(units=("units_sold", "sum"), transactions=("transactions", "first")).reset_index()
-    visitors = footfall_df[footfall_df["zone"] == zone]
+    units = store.sales[store.sales["category"].isin(categories)]
+    bills = store.transactions[store.transactions["category"].isin(categories)]
+    visitors = store.footfall[store.footfall["zone"] == zone]
 
     def in_window(df, first_day, last_day):
         """Rows from first_day..last_day, stopping at `hour` on `day` itself."""
@@ -406,16 +372,16 @@ def get_conversion_metrics(category=None, line=None, zone=None, day=TODAY_DAY,
         ]
 
     def summarise(first_day, last_day):
-        s = in_window(per_category_hour, first_day, last_day)
         v = int(in_window(visitors, first_day, last_day)["visitors"].sum())
-        tx, units = int(s["transactions"].sum()), int(s["units"].sum())
+        tx = int(in_window(bills, first_day, last_day)["transactions"].sum())
+        u = int(in_window(units, first_day, last_day)["units_sold"].sum())
         return {
             "days": f"{first_day}-{last_day}" if first_day != last_day else str(first_day),
             "zone_visitors": v,
             "transactions": tx,
-            "units": units,
+            "units": u,
             "conversion_rate_pct": round(tx / v * 100, 1) if v else None,
-            "units_per_transaction": round(units / tx, 2) if tx else None,
+            "units_per_transaction": round(u / tx, 2) if tx else None,
         }
 
     recent_start = max(1, day - 3)
@@ -425,12 +391,11 @@ def get_conversion_metrics(category=None, line=None, zone=None, day=TODAY_DAY,
     baseline = summarise(1, baseline_end)
 
     # Typical visitors for the recent days, from baseline days of the same kind.
-    calendar = {d["day"]: d for d in month_calendar()}
     baseline_days = range(1, baseline_end + 1)
     typical_recent_visitors = 0.0
     for d in range(recent_start, day + 1):
-        through = hour if d == day else STORE_HOURS[-1]
-        same_kind = [b for b in baseline_days if is_busy_day(calendar[b]) == is_busy_day(calendar[d])]
+        through = hour if d == day else store.hours[-1]
+        same_kind = [b for b in baseline_days if store.is_busy(b) == store.is_busy(d)]
         per_day = visitors[visitors["day"].isin(same_kind) & (visitors["hour"] <= through)]
         typical_recent_visitors += per_day["visitors"].sum() / max(len(same_kind), 1)
 
@@ -498,8 +463,9 @@ _STATUS_LABEL = {
 }
 
 
-def _print_pace_table(day, hour):
-    results = get_category_pace(day, hour)
+def _print_pace_table(store):
+    results = get_category_pace(store=store)
+    day, hour = store.today_day, store.default_hour
     print(f"\nMonth-to-date pace as of day {day}, {hour}:00\n")
     header = (f"{'Line':<7}{'Category':<17}{'Target':>7}{'Sold':>6}{'Balance':>8}"
               f"{'Expected':>9}{'vs pace':>9}{'Per day':>8}{'Needs/day':>10}  Status")
@@ -511,7 +477,7 @@ def _print_pace_table(day, hour):
             current_line = r["line"]
         flag = "  (unlikely without action)" if r["unlikely_without_action"] else ""
         print(
-            f"{r['line']:<7}{CATEGORY_PRODUCT[r['category']]:<17}{r['monthly_target']:>7}"
+            f"{r['line']:<7}{store.category_product[r['category']]:<17}{r['monthly_target']:>7}"
             f"{r['units_sold_so_far']:>6}{r['balance_to_do']:>8}{r['expected_units_by_now']:>9}"
             f"{r['pct_vs_pace']:>8}%{r['actual_units_per_day']:>8}{r['needed_units_per_day']:>10}"
             f"  {_STATUS_LABEL[r['status']]}{flag}"
@@ -527,9 +493,9 @@ def _print_pace_table(day, hour):
         f"{r['category']} ({r['pct_vs_pace']:+.0f}%, {r['status']})" for r in needs_attention))
 
 
-def _print_contribution(day, hour):
-    report = get_contribution(day, hour)
-    print(f"\nContribution report, month-to-date as of day {day}, {hour}:00\n")
+def _print_contribution(store):
+    report = get_contribution(store=store)
+    print(f"\nContribution report, month-to-date as of day {store.today_day}, {store.default_hour}:00\n")
     print(f"{'Line':<8}{'Units':>7}{'Value (INR)':>14}{'Units %':>9}{'Value %':>9}")
     print("-" * 47)
     for l in report["lines"]:
@@ -539,11 +505,11 @@ def _print_contribution(day, hour):
     print("\nIntegrity checks passed: " + "; ".join(report["checks_passed"]))
 
 
-def _print_today_by_line(hours):
-    print(f"\nToday (day {TODAY_DAY}) by line — status as the day goes on\n")
-    snapshots = {h: {r["line"]: r for r in get_today_pace(hour=h)} for h in hours}
+def _print_today_by_line(store, hours):
+    print(f"\nToday (day {store.today_day}) by line — status as the day goes on\n")
+    snapshots = {h: {r["line"]: r for r in get_today_pace(hour=h, store=store)} for h in hours}
     print(f"{'Line':<8}" + "".join(f"{f'{h}:00':>22}" for h in hours))
-    for ln in LINES:
+    for ln in store.lines:
         cells = []
         for h in hours:
             r = snapshots[h][ln]
@@ -552,15 +518,15 @@ def _print_today_by_line(hours):
     print("  (cells show units sold today / expected by then, and status)")
 
 
-def _print_footfall():
-    print(f"\nFootfall today vs a typical day of the same kind, by {DEFAULT_CURRENT_HOUR}:00\n")
-    for zone in DEPARTMENTS:
-        f = get_footfall(zone=zone)
+def _print_footfall(store):
+    print(f"\nFootfall today vs a typical day of the same kind, by {store.default_hour}:00\n")
+    for zone in store.departments:
+        f = get_footfall(zone=zone, store=store)
         print(f"  {zone:<11} today {f['visitors_today_so_far']:>4}   typical "
               f"{f['typical_visitors_by_this_hour']:>6}   ({f['pct_vs_typical']:+.0f}%)")
 
 
-def _print_conversion():
+def _print_conversion(store):
     print("\nTraffic vs conversion: last 3 days + today, compared with the first half of the month\n")
     print(f"{'Subject':<24}{'Visitors vs typical':>21}{'Conversion':>20}{'UPT':>14}   Reading")
     subjects = [
@@ -569,7 +535,7 @@ def _print_conversion():
         {"category": "LB Knit Top"}, {"category": "THT Blazer"},
     ]
     for kwargs in subjects:
-        m = get_conversion_metrics(**kwargs)
+        m = get_conversion_metrics(**kwargs, store=store)
         b, r = m["baseline_earlier_this_month"], m["recent_last_3_days_and_today"]
         print(
             f"{m['subject']:<24}{r['zone_visitors']:>6} vs {m['typical_visitors_for_recent_days']:<4}"
@@ -581,8 +547,9 @@ def _print_conversion():
 
 
 if __name__ == "__main__":
-    _print_pace_table(TODAY_DAY, DEFAULT_CURRENT_HOUR)
-    _print_contribution(TODAY_DAY, DEFAULT_CURRENT_HOUR)
-    _print_today_by_line([11, 14, 16, 19])
-    _print_footfall()
-    _print_conversion()
+    demo, _, _ = resolve()
+    _print_pace_table(demo)
+    _print_contribution(demo)
+    _print_today_by_line(demo, [11, 14, 16, 19])
+    _print_footfall(demo)
+    _print_conversion(demo)

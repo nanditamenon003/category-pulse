@@ -2,6 +2,10 @@
 All tunable business rules live here, in one place, so they are easy to
 find and change without hunting through the rest of the codebase.
 
+It also defines the simulated demo store (its lines, categories, targets,
+sizes and calendar). The calculations don't read those directly: they read a
+Store (store.py), so any other store can supply its own.
+
 The store model mirrors how a real Tommy Hilfiger store in India tracks its
 business: monthly unit targets per line and category, reviewed month-to-date.
 All numbers are simulated and illustrative — no real store figures are used.
@@ -171,6 +175,13 @@ SIZE_SYSTEMS = {
         "core": ["3-4Y", "5-6Y"],
     },
 }
+
+
+# For a store whose data doesn't say which sizes are core, they're learned
+# from its sales: the fewest best-selling sizes that together make up at
+# least half of a category's units. (On the demo store's size mixes this
+# picks exactly the core sizes above, e.g. M and L in men's tops.)
+CORE_SIZE_SALES_SHARE = 0.5
 
 
 def size_system_for(category):

@@ -16,20 +16,11 @@ import streamlit as st
 
 import diagnosis
 import digest
-import generate_data
 import kpi
 import loyalty
 import staffing
 import stock
-from config import (
-    CATEGORIES,
-    CATEGORY_PRODUCT,
-    DEFAULT_CURRENT_HOUR,
-    DEPARTMENTS,
-    STORE_HOURS,
-    TODAY_DAY,
-    month_calendar,
-)
+from store import demo_store
 
 # Palette from the spec. Green is one shade darker than the spec's #1E8E3E so
 # white label text on it meets accessibility contrast (4.2:1 -> 5.0:1).
@@ -213,70 +204,33 @@ header[data-testid="stHeader"] {{ background: {PAGE}; border-bottom: 1px solid {
 """
 
 
-# --- The chosen time of day, shared by every page -----------------------------------
+# --- The store being looked at, and the chosen time of day ---------------------------
+
+@st.cache_resource(show_spinner="Setting up the simulated store data (first start only)...")
+def load_data():
+    # The demo's data files aren't stored in git: they regenerate identically
+    # from the fixed seed, so a fresh deployment builds them on first start.
+    return demo_store()
+
+
+def current_store():
+    """The store every page shows. For now always the demo store."""
+    return load_data()
+
 
 def current_hour():
     """The hour slot the whole app is looking at (10 = 10:00-11:00 ... 19 = 19:00-20:00)."""
-    return st.session_state.setdefault("hour", DEFAULT_CURRENT_HOUR)
+    return st.session_state.setdefault("hour", current_store().default_hour)
 
 
 def time_label(hour):
     """Clock time at the end of an hour slot, e.g. slot 16 -> '17:00'."""
-    return "20:00 (close)" if hour == STORE_HOURS[-1] else f"{hour + 1}:00"
+    return f"{hour + 1}:00 (close)" if hour == current_store().hours[-1] else f"{hour + 1}:00"
 
 
 def today_label():
-    day = month_calendar()[TODAY_DAY - 1]
-    return pd.Timestamp(day["date"]).strftime("%a %d %b")
-
-
-# --- Data (loaded once, computed once per hour) --------------------------------------
-
-@st.cache_resource(show_spinner="Setting up the simulated store data (first start only)...")
-def load_data():
-    # The data files aren't stored in git: they regenerate identically from
-    # the fixed seed, so a fresh deployment builds them on first start.
-    if not generate_data.data_is_present():
-        generate_data.generate_all()
-    return diagnosis.load_all()
-
-
-@st.cache_data(show_spinner=False)
-def pace_at(hour):
-    return kpi.get_category_pace(TODAY_DAY, hour, sales_df=load_data()["sales_df"])
-
-
-@st.cache_data(show_spinner=False)
-def today_at(hour):
-    return kpi.get_today_pace(day=TODAY_DAY, hour=hour, sales_df=load_data()["sales_df"])
-
-
-@st.cache_data(show_spinner=False)
-def stock_health_at(hour):
-    return stock.get_stock_health_report(TODAY_DAY, hour, stock_df=load_data()["stock_df"])
-
-
-@st.cache_data(show_spinner=False)
-def last_pieces_at(hour):
-    data = load_data()
-    return stock.get_last_piece_alerts(TODAY_DAY, hour, stock_df=data["stock_df"],
-                                       sales_df=data["sales_df"])
-
-
-@st.cache_data(show_spinner=False)
-def digest_at(hour):
-    return digest.generate_digest(TODAY_DAY, hour, data=load_data())
-
-
-@st.cache_data(show_spinner=False)
-def diagnoses_at(hour):
-    """Likely cause, evidence and action for every category, keyed by category."""
-    return {d["category"]: d for d in diagnosis.diagnose_store(TODAY_DAY, hour, data=load_data())}
-
-
-@st.cache_data(show_spinner=False)
-def contribution_at(hour):
-    return kpi.get_contribution(TODAY_DAY, hour, sales_df=load_data()["sales_df"])
+    s = current_store()
+    return s.date(s.today_day).strftime("%a %d %b")
 
 
 def inr(value):
@@ -294,79 +248,137 @@ def inr(value):
     return "₹" + ",".join(groups) + "," + tail
 
 
-@st.cache_data(show_spinner=False)
-def playbook_for(category):
-    return loyalty.get_tier_playbook(category)
+# --- Data lookups, each worked out once per store and time ------------------------------
+# Results are cached by the store's id plus the lookup's arguments, so one
+# store's numbers can never be shown for another.
 
-
-@st.cache_data(show_spinner=False)
-def cross_sell_at(hour):
-    data = load_data()
-    ideas = loyalty.get_cross_sell_ideas(TODAY_DAY, hour, sales_df=data["sales_df"],
-                                         stock_df=data["stock_df"])
-    return {i["category"]: i for i in ideas}
-
-
-@st.cache_data(show_spinner="Checking every size...")
-def risky_sizes_at(hour):
+def _risky_sizes(s, hour):
     """Sizes likely to run out before the next scheduled delivery (a projection), all categories."""
-    data = load_data()
     rows, next_delivery = [], None
-    for category in CATEGORIES:
-        cover = stock.get_days_of_cover(category, TODAY_DAY, hour, stock_df=data["stock_df"],
-                                        sales_df=data["sales_df"])
+    for category in s.categories:
+        cover = stock.get_days_of_cover(category, hour=hour, store=s)
         next_delivery = cover["next_scheduled_delivery_day"]
-        for s in cover["sizes"]:
-            if s["likely_out_before_next_delivery"]:
-                rows.append({"category": category, **s})
+        for size in cover["sizes"]:
+            if size["likely_out_before_next_delivery"]:
+                rows.append({"category": category, **size})
     return sorted(rows, key=lambda r: r["projected_days_of_cover"]), next_delivery
 
 
-@st.cache_data(show_spinner=False)
-def zones_at(hour):
+def _zones(s, hour):
     """Visitors today and visitors-vs-buyers for each floor zone."""
-    data = load_data()
     return [
         {
-            "footfall": kpi.get_footfall(zone=zone, day=TODAY_DAY, hour=hour,
-                                         footfall_df=data["footfall_df"]),
-            "conversion": kpi.get_conversion_metrics(zone=zone, day=TODAY_DAY, hour=hour,
-                                                     sales_df=data["sales_df"],
-                                                     footfall_df=data["footfall_df"]),
+            "footfall": kpi.get_footfall(zone=zone, hour=hour, store=s),
+            "conversion": kpi.get_conversion_metrics(zone=zone, hour=hour, store=s),
         }
-        for zone in DEPARTMENTS
+        for zone in s.departments
     ]
 
 
-@st.cache_data(show_spinner=False)
-def staffing_for(day):
+def _staffing(s, day):
     """Staffing advice for `day`, plus each zone's hourly visitor pattern for the chart."""
-    footfall_df = load_data()["footfall_df"]
-    rec = staffing.get_staffing_recommendation(day, footfall_df=footfall_df)
+    rec = staffing.get_staffing_recommendation(day, store=s)
     busy = rec["day_type"] != "weekday"
-    patterns = {z: staffing.get_peak_hours(z, busy, before_day=day, footfall_df=footfall_df)
-                for z in DEPARTMENTS}
+    patterns = {z: staffing.get_peak_hours(z, busy, before_day=day, store=s) for z in s.departments}
     return rec, patterns
 
 
-@st.cache_data(show_spinner="Looking up this category...")
-def category_detail_at(category, hour):
-    """Everything the category pop-up shows, fetched once per category and hour."""
-    data = load_data()
-    sales_df, stock_df, footfall_df = data["sales_df"], data["stock_df"], data["footfall_df"]
+def _category_detail(s, category, hour):
+    """Everything the category pop-up shows."""
     return {
-        "pace": kpi.get_category_pace(TODAY_DAY, hour, category=category, sales_df=sales_df)[0],
-        "stock": stock.get_stock_status(category, TODAY_DAY, hour, stock_df=stock_df),
-        "health": stock.check_size_runs(category, TODAY_DAY, hour, stock_df=stock_df),
-        "history": stock.get_stock_history(category, TODAY_DAY, hour, stock_df=stock_df,
-                                           sales_df=sales_df),
-        "cover": stock.get_days_of_cover(category, TODAY_DAY, hour, stock_df=stock_df,
-                                         sales_df=sales_df),
-        "conversion": kpi.get_conversion_metrics(category=category, day=TODAY_DAY, hour=hour,
-                                                 sales_df=sales_df, footfall_df=footfall_df),
-        "playbook": loyalty.get_tier_playbook(category),
+        "pace": kpi.get_category_pace(hour=hour, category=category, store=s)[0],
+        "stock": stock.get_stock_status(category, hour=hour, store=s),
+        "health": stock.check_size_runs(category, hour=hour, store=s),
+        "history": stock.get_stock_history(category, hour=hour, store=s),
+        "cover": stock.get_days_of_cover(category, hour=hour, store=s),
+        "conversion": kpi.get_conversion_metrics(category=category, hour=hour, store=s),
+        "playbook": loyalty.get_tier_playbook(category, store=s),
     }
 
+
+LOOKUPS = {
+    "pace": lambda s, hour: kpi.get_category_pace(hour=hour, store=s),
+    "today": lambda s, hour: kpi.get_today_pace(hour=hour, store=s),
+    "stock_health": lambda s, hour: stock.get_stock_health_report(hour=hour, store=s),
+    "last_pieces": lambda s, hour: stock.get_last_piece_alerts(hour=hour, store=s),
+    "digest": lambda s, hour: digest.generate_digest(hour=hour, store=s),
+    "diagnoses": lambda s, hour: {d["category"]: d for d in diagnosis.diagnose_store(hour=hour, store=s)},
+    "contribution": lambda s, hour: kpi.get_contribution(hour=hour, store=s),
+    "playbook": lambda s, category: loyalty.get_tier_playbook(category, store=s),
+    "cross_sell": lambda s, hour: {i["category"]: i for i in loyalty.get_cross_sell_ideas(hour=hour, store=s)},
+    "risky_sizes": _risky_sizes,
+    "zones": _zones,
+    "staffing": _staffing,
+    "category_detail": _category_detail,
+}
+
+
+@st.cache_data(show_spinner=False)
+def _lookup(store_id, name, args, _store):
+    return LOOKUPS[name](_store, *args)
+
+
+@st.cache_data(show_spinner="Working it out...")
+def _slow_lookup(store_id, name, args, _store):
+    return LOOKUPS[name](_store, *args)
+
+
+def _get(name, *args, slow=False):
+    s = current_store()
+    return (_slow_lookup if slow else _lookup)(s.id, name, args, s)
+
+
+def pace_at(hour):
+    return _get("pace", hour)
+
+
+def today_at(hour):
+    return _get("today", hour)
+
+
+def stock_health_at(hour):
+    return _get("stock_health", hour)
+
+
+def last_pieces_at(hour):
+    return _get("last_pieces", hour)
+
+
+def digest_at(hour):
+    return _get("digest", hour)
+
+
+def diagnoses_at(hour):
+    """Likely cause, evidence and action for every category, keyed by category."""
+    return _get("diagnoses", hour)
+
+
+def contribution_at(hour):
+    return _get("contribution", hour)
+
+
+def playbook_for(category):
+    return _get("playbook", category)
+
+
+def cross_sell_at(hour):
+    return _get("cross_sell", hour)
+
+
+def risky_sizes_at(hour):
+    return _get("risky_sizes", hour, slow=True)
+
+
+def zones_at(hour):
+    return _get("zones", hour)
+
+
+def staffing_for(day):
+    return _get("staffing", day)
+
+
+def category_detail_at(category, hour):
+    return _get("category_detail", category, hour, slow=True)
 
 # --- Small HTML builders -------------------------------------------------------------
 
@@ -399,7 +411,7 @@ def heading(text, sub=""):
 
 
 def category_card(p, show_line=True, cause=None):
-    name = p["category"] if show_line else CATEGORY_PRODUCT[p["category"]]
+    name = p["category"] if show_line else current_store().category_product[p["category"]]
     tone = STATUS[p["status"]][1]
     detail = f"{p['pct_vs_pace']:+.0f}% vs pace"
     if p["status"] in ("behind", "drifting") and p["needed_units_per_day"] > 0:

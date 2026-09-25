@@ -2,24 +2,15 @@
 Peak-hour staffing (Phase 6b).
 
 Learns each floor zone's busiest hours from this month's visitor history,
-kept separate for normal weekdays and busy days (weekends and the sale day),
+kept separate for normal weekdays and busy days (weekends and sale days),
 because they trade differently. Recommends where to put floor cover
 tomorrow, always naming the past days the advice is based on.
+
+Needs visitor counts by hour.
 """
 
-from config import (
-    DELIVERY_WEEKDAY,
-    DEPARTMENTS,
-    PEAK_SHARE_OF_BUSIEST_HOUR,
-    SALE_DAY,
-    STORE_HOURS,
-    TODAY_DAY,
-    is_busy_day,
-    month_calendar,
-)
-from kpi import load_footfall_data
-
-WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+from config import PEAK_SHARE_OF_BUSIEST_HOUR
+from store import WEEKDAY_NAMES, resolve
 
 # Below this many visitors in a zone's busiest hour, its peaks are mostly noise.
 LOW_TRAFFIC_VISITORS_PER_HOUR = 3
@@ -41,39 +32,50 @@ def _hour_windows(hours):
     return [f"{s}:00-{e + 1}:00" for s, e in windows]
 
 
-def get_peak_hours(zone, busy_day, before_day=TODAY_DAY + 1, footfall_df=None):
+def get_peak_hours(zone, busy_day, before_day=None, store=None):
     """
     Average visitors per hour for a zone on past days of one kind (busy days
-    = weekends + sale day, or normal weekdays), and the peak windows: hours
+    = weekends + sale days, or normal weekdays), and the peak windows: hours
     with at least PEAK_SHARE_OF_BUSIEST_HOUR of the busiest hour's visitors.
     """
-    if zone not in DEPARTMENTS:
-        raise ValueError(f"zone must be one of {DEPARTMENTS}")
-    if footfall_df is None:
-        footfall_df = load_footfall_data()
+    store, _, _ = resolve(store)
+    store.require("visitor_hours")
+    if zone not in store.departments:
+        raise ValueError(f"zone must be one of {store.departments}")
+    if before_day is None:
+        before_day = store.today_day + 1
 
-    calendar = {d["day"]: d for d in month_calendar()}
-    days_with_data = set(footfall_df["day"])
+    footfall = store.footfall
+    days_with_data = set(footfall["day"])
     based_on = [
         d for d in range(1, before_day)
-        if d in days_with_data and is_busy_day(calendar[d]) == busy_day
+        if d in days_with_data and store.is_busy(d) == busy_day
     ]
-    history = footfall_df[(footfall_df["zone"] == zone) & footfall_df["day"].isin(based_on)]
+    history = footfall[(footfall["zone"] == zone) & footfall["day"].isin(based_on)]
     avg_by_hour = (
-        history.groupby("hour")["visitors"].sum().reindex(STORE_HOURS, fill_value=0) / len(based_on)
+        history.groupby("hour")["visitors"].sum().reindex(store.hours, fill_value=0)
+        / max(len(based_on), 1)
     )
     busiest = float(avg_by_hour.max())
-    peak_hours = [h for h, v in avg_by_hour.items() if v >= PEAK_SHARE_OF_BUSIEST_HOUR * busiest]
+    peak_hours = [h for h, v in avg_by_hour.items()
+                  if busiest > 0 and v >= PEAK_SHARE_OF_BUSIEST_HOUR * busiest]
 
-    return {
+    if not based_on:
+        reliability = "no past days of this kind"
+    elif busiest < LOW_TRAFFIC_VISITORS_PER_HOUR:
         # With only a few visitors an hour, which hour is "busiest" is mostly
         # chance, so the peaks are only a rough guide.
-        "reliability": "rough guide (low traffic)" if busiest < LOW_TRAFFIC_VISITORS_PER_HOUR else "good",
+        reliability = "rough guide (low traffic)"
+    else:
+        reliability = "good"
+
+    return {
+        "reliability": reliability,
         "zone": zone,
         "day_type": "weekend / sale day" if busy_day else "weekday",
         "based_on_days": [
-            f"day {d} ({WEEKDAY_NAMES[calendar[d]['weekday']]}"
-            f"{', sale day' if d == SALE_DAY else ''})"
+            f"day {d} ({WEEKDAY_NAMES[store.weekday(d)]}"
+            f"{', sale day' if d in store.sale_days else ''})"
             for d in based_on
         ],
         "avg_visitors_by_hour": {int(h): round(float(v), 1) for h, v in avg_by_hour.items()},
@@ -83,34 +85,35 @@ def get_peak_hours(zone, busy_day, before_day=TODAY_DAY + 1, footfall_df=None):
     }
 
 
-def get_staffing_recommendation(for_day=TODAY_DAY + 1, footfall_df=None):
+def get_staffing_recommendation(for_day=None, store=None):
     """
     Where floor cover matters most on `for_day` (default: tomorrow), per
     zone, from the history of days of the same kind. Also suggests how to
     split the floor team across zones at the busiest time, in proportion to
     each zone's visitors then.
     """
-    if footfall_df is None:
-        footfall_df = load_footfall_data()
-    calendar = month_calendar()
-    if not 1 <= for_day <= len(calendar):
-        raise ValueError(f"for_day must be within the month (1-{len(calendar)})")
-    target = calendar[for_day - 1]
-    busy = is_busy_day(target)
+    store, _, _ = resolve(store)
+    store.require("visitor_hours")
+    if for_day is None:
+        for_day = store.today_day + 1
+    if not 1 <= for_day <= store.days_in_month:
+        raise ValueError(f"for_day must be within the month (1-{store.days_in_month})")
+    busy = store.is_busy(for_day)
 
-    zones = [get_peak_hours(z, busy, before_day=for_day, footfall_df=footfall_df) for z in DEPARTMENTS]
+    zones = [get_peak_hours(z, busy, before_day=for_day, store=store) for z in store.departments]
 
     store_by_hour = {
-        h: sum(z["avg_visitors_by_hour"][h] for z in zones) for h in STORE_HOURS
+        h: sum(z["avg_visitors_by_hour"][h] for z in zones) for h in store.hours
     }
     store_peak_hour = max(store_by_hour, key=store_by_hour.get)
+    peak_total = store_by_hour[store_peak_hour]
     split = {
-        z["zone"]: round(z["avg_visitors_by_hour"][store_peak_hour] / store_by_hour[store_peak_hour] * 100)
+        z["zone"]: round(z["avg_visitors_by_hour"][store_peak_hour] / peak_total * 100) if peak_total else 0
         for z in zones
     }
 
     notes = []
-    if target["weekday"] == DELIVERY_WEEKDAY:
+    if store.delivery_weekday is not None and store.weekday(for_day) == store.delivery_weekday:
         notes.append(
             "Delivery day: receiving and putting away stock takes staff time, so schedule it "
             "before the first peak rather than during it."
@@ -118,8 +121,8 @@ def get_staffing_recommendation(for_day=TODAY_DAY + 1, footfall_df=None):
 
     return {
         "for_day": for_day,
-        "date": target["date"],
-        "weekday": WEEKDAY_NAMES[target["weekday"]],
+        "date": store.date(for_day).isoformat(),
+        "weekday": WEEKDAY_NAMES[store.weekday(for_day)],
         "day_type": "weekend / sale day" if busy else "weekday",
         "zones": [
             {
@@ -138,8 +141,8 @@ def get_staffing_recommendation(for_day=TODAY_DAY + 1, footfall_df=None):
     }
 
 
-def _print_recommendation():
-    rec = get_staffing_recommendation()
+def _print_recommendation(store):
+    rec = get_staffing_recommendation(store=store)
     print(f"\nStaffing for tomorrow: day {rec['for_day']}, {rec['weekday']} ({rec['day_type']})")
     print(f"Based on {len(rec['based_on_days'])} past {rec['day_type']}s: "
           + ", ".join(rec["based_on_days"]))
@@ -153,14 +156,15 @@ def _print_recommendation():
         print(f"  Note: {note}")
 
 
-def _print_weekend_contrast():
+def _print_weekend_contrast(store):
     print("\nFor comparison, weekend / sale-day peaks:")
-    for zone in DEPARTMENTS:
-        p = get_peak_hours(zone, busy_day=True)
+    for zone in store.departments:
+        p = get_peak_hours(zone, busy_day=True, store=store)
         print(f"  {zone:<11} peaks {', '.join(p['peak_windows']):<26} "
               f"~{p['avg_visitors_per_day']:.0f} visitors/day")
 
 
 if __name__ == "__main__":
-    _print_recommendation()
-    _print_weekend_contrast()
+    demo, _, _ = resolve()
+    _print_recommendation(demo)
+    _print_weekend_contrast(demo)

@@ -4,73 +4,67 @@ Stock logic: what's on the shelf, what came in, and what that means.
 get_stock_status() reads what's left right now; get_stock_history() looks
 back over recent days and spots deliveries, so the agent can find the cause
 of a problem (a missed delivery, a delivery missing key sizes), not just the
-symptom. check_size_runs() becomes real broken-size-run detection in Phase
-6e; last-piece alerts are added in Phase 6a.
+symptom. check_size_runs() tells a broken size run apart from a stockout,
+and get_last_piece_alerts() flags sizes the moment they drop to one unit.
+
+Stock can be counted every hour (the demo store), once a day, or just once:
+each function uses the latest count at or before the moment asked about,
+and says which count that was.
 """
-
-import os
-
-import pandas as pd
 
 from config import (
     BROKEN_RUN_MIN_SHARE,
-    CATEGORIES,
     CORE_DEPLETED_MAX_UNITS,
-    DEFAULT_CURRENT_HOUR,
-    DELIVERY_WEEKDAY,
     LAST_PIECE_THRESHOLD,
     STOCKOUT_MAX_SHARE,
-    STORE_HOURS,
-    TODAY_DAY,
-    month_calendar,
-    size_system_for,
 )
-
-DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
-STOCK_PATH = os.path.join(DATA_DIR, "stock.csv")
+from store import resolve
 
 
-def load_stock_data():
-    """Loads the remaining-stock data from disk."""
-    return pd.read_csv(STOCK_PATH)
-
-
-def _validate(category, day, hour):
-    if category not in CATEGORIES:
+def _validate(store, category, day, hour):
+    if category not in store.categories:
         raise ValueError(f"Unknown category {category!r}")
-    if not 1 <= day <= TODAY_DAY:
-        raise ValueError(f"day must be between 1 and {TODAY_DAY} (today), got {day}")
-    if hour not in STORE_HOURS:
+    if not 1 <= day <= store.today_day:
+        raise ValueError(f"day must be between 1 and {store.today_day} (today), got {day}")
+    if hour not in store.hours:
         raise ValueError(
-            f"hour must be a store hour between {STORE_HOURS[0]} and {STORE_HOURS[-1]}, got {hour}"
+            f"hour must be a store hour between {store.hours[0]} and {store.hours[-1]}, got {hour}"
         )
+    store.require("stock")
 
 
-def _remaining_by_size(stock_df, category, day, hour):
-    rows = stock_df[
-        (stock_df["category"] == category) & (stock_df["day"] == day) & (stock_df["hour"] == hour)
-    ]
-    found = dict(zip(rows["size"].astype(str), rows["units_remaining"].astype(int)))
-    return {size: found.get(size, 0) for size in size_system_for(category)["sizes"]}
+def _remaining_by_size(store, category, day, hour):
+    """Units left by size at exactly (day, hour); sizes not in the count have none left."""
+    found = store.stock_lookup.get((category, day, hour), {})
+    return {size: found.get(size, 0) for size in store.sizes[category]}
 
 
-def get_stock_status(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, stock_df=None):
+def _closing_hour(store, day):
+    """The last hour stock was counted on `day`, or None if it wasn't counted."""
+    hours = store.stock_hours_by_day.get(day)
+    return hours[-1] if hours else None
+
+
+def get_stock_status(category, day=None, hour=None, store=None):
     """
     Units left on the shelf by size for a category at the end of `hour` on
-    `day`, plus which sizes are completely out, which of those are core sizes
-    (the ones most customers need), and whether the whole category is out.
+    `day` (from the latest stock count at or before then), plus which sizes
+    are completely out, which of those are core sizes (the ones most
+    customers need), and whether the whole category is out.
     """
-    _validate(category, day, hour)
-    if stock_df is None:
-        stock_df = load_stock_data()
+    store, day, hour = resolve(store, day, hour)
+    _validate(store, category, day, hour)
 
-    remaining = _remaining_by_size(stock_df, category, day, hour)
-    core = size_system_for(category)["core"]
+    counted = store.latest_stock_moment(day, hour)
+    remaining = (_remaining_by_size(store, category, *counted) if counted
+                 else {size: 0 for size in store.sizes[category]})
+    core = store.core_sizes[category]
     out_sizes = [s for s, units in remaining.items() if units == 0]
 
     return {
         "category": category,
         "as_of": {"day": day, "hour": hour},
+        "stock_counted_at": {"day": counted[0], "hour": counted[1]} if counted else None,
         "remaining_by_size": remaining,
         "total_remaining": sum(remaining.values()),
         "core_sizes": core,
@@ -81,24 +75,28 @@ def get_stock_status(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, stock_d
     }
 
 
-def _deliveries_received(category, up_to_day, stock_df, sales_df):
+def _deliveries_received(store, category, up_to_day):
     """
-    Deliveries aren't recorded separately, so they're inferred: if a day
-    opened with more stock than the previous day closed with (after allowing
-    for the first hour's sales), the difference was delivered overnight.
+    Deliveries aren't recorded separately, so they're inferred: if a day's
+    first stock count shows more than the previous day closed with (after
+    adding back what sold before that count), the difference was delivered
+    overnight.
     """
-    core = size_system_for(category)["core"]
-    first_hour, last_hour = STORE_HOURS[0], STORE_HOURS[-1]
-    cat_sales = sales_df[(sales_df["category"] == category) & (sales_df["hour"] == first_hour)]
+    core = store.core_sizes[category]
+    sales = store.sales[store.sales["category"] == category]
 
     deliveries = []
     for d in range(2, up_to_day + 1):  # day 1 is the month's opening stock
-        prev_close = _remaining_by_size(stock_df, category, d - 1, last_hour)
-        after_first_hour = _remaining_by_size(stock_df, category, d, first_hour)
-        sold = cat_sales[cat_sales["day"] == d]
-        sold_first_hour = dict(zip(sold["size"].astype(str), sold["units_sold"].astype(int)))
+        prev_hour, hours_today = _closing_hour(store, d - 1), store.stock_hours_by_day.get(d)
+        if prev_hour is None or not hours_today:
+            continue
+        first_count = hours_today[0]
+        prev_close = _remaining_by_size(store, category, d - 1, prev_hour)
+        at_first_count = _remaining_by_size(store, category, d, first_count)
+        sold = sales[(sales["day"] == d) & (sales["hour"] <= first_count)]
+        sold_before_count = sold.groupby("size")["units_sold"].sum().to_dict()
         received = {
-            s: after_first_hour[s] + sold_first_hour.get(s, 0) - prev_close[s]
+            s: at_first_count[s] + sold_before_count.get(s, 0) - prev_close[s]
             for s in prev_close
         }
         if any(units > 0 for units in received.values()):
@@ -111,8 +109,7 @@ def _deliveries_received(category, up_to_day, stock_df, sales_df):
     return deliveries
 
 
-def get_stock_history(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, days_back=10,
-                      stock_df=None, sales_df=None):
+def get_stock_history(category, day=None, hour=None, days_back=10, store=None):
     """
     The recent stock story for a category:
       - end-of-day stock (total and core sizes) for the last `days_back` days
@@ -122,29 +119,27 @@ def get_stock_history(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, days_b
     This is how the agent finds the cause behind a stockout or broken size
     run, not just the symptom.
     """
-    _validate(category, day, hour)
-    if stock_df is None:
-        stock_df = load_stock_data()
-    if sales_df is None:
-        from kpi import load_sales_data
-        sales_df = load_sales_data()
+    store, day, hour = resolve(store, day, hour)
+    _validate(store, category, day, hour)
 
-    core = size_system_for(category)["core"]
+    core = store.core_sizes[category]
     daily = []
     for d in range(max(1, day - days_back + 1), day + 1):
-        close_hour = hour if d == day else STORE_HOURS[-1]
-        remaining = _remaining_by_size(stock_df, category, d, close_hour)
+        hours = [h for h in store.stock_hours_by_day.get(d, []) if d < day or h <= hour]
+        if not hours:
+            continue  # no stock count that day
+        remaining = _remaining_by_size(store, category, d, hours[-1])
         daily.append({
             "day": d,
-            "as_of_hour": close_hour,
+            "as_of_hour": hours[-1],
             "total_remaining": sum(remaining.values()),
             "core_units_remaining": sum(remaining[s] for s in core),
         })
 
-    deliveries = _deliveries_received(category, day, stock_df, sales_df)
+    deliveries = _deliveries_received(store, category, day)
     delivered_days = {d["day"] for d in deliveries}
-    scheduled_days = [
-        d["day"] for d in month_calendar()[1:day] if d["weekday"] == DELIVERY_WEEKDAY
+    scheduled_days = [] if store.delivery_weekday is None else [
+        d for d in range(2, day + 1) if store.weekday(d) == store.delivery_weekday
     ]
 
     return {
@@ -158,21 +153,25 @@ def get_stock_history(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, days_b
     }
 
 
-def _usual_stock_level(stock_df, category, day):
+def _usual_stock_level(store, category, day):
     """
     The category's typical end-of-day stock earlier this month (the median,
     so a few unusual days don't distort it). Learned from the data, the way
-    it would be from a real store's stock history.
+    it would be from a real store's stock history. None without history.
     """
-    closes = stock_df[
-        (stock_df["category"] == category)
-        & (stock_df["day"] < day)
-        & (stock_df["hour"] == STORE_HOURS[-1])
-    ].groupby("day")["units_remaining"].sum()
-    return float(closes.median()) if len(closes) else None
+    closes = []
+    for d in range(1, day):
+        close = _closing_hour(store, d)
+        if close is not None:
+            closes.append(sum(store.stock_lookup.get((category, d, close), {}).values()))
+    if not closes:
+        return None
+    closes.sort()
+    middle = len(closes) // 2
+    return float(closes[middle] if len(closes) % 2 else (closes[middle - 1] + closes[middle]) / 2)
 
 
-def check_size_runs(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, stock_df=None):
+def check_size_runs(category, day=None, hour=None, store=None):
     """
     Classifies a category's stock health, keeping a broken size run distinct
     from a plain stockout (see the thresholds in config.py):
@@ -180,22 +179,33 @@ def check_size_runs(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, stock_df
       - "broken_size_run": core sizes gone, but the shelf still looks full
       - "running_out": core sizes gone and overall stock getting low
       - "healthy": core sizes available
+    Without earlier stock counts to learn the usual level from, it judges by
+    sizes alone: every size down to its last unit is a stockout, and core
+    sizes gone while other sizes still have stock is a broken size run.
     """
-    _validate(category, day, hour)
-    if stock_df is None:
-        stock_df = load_stock_data()
+    store, day, hour = resolve(store, day, hour)
+    _validate(store, category, day, hour)
 
-    status = get_stock_status(category, day, hour, stock_df=stock_df)
+    status = get_stock_status(category, day, hour, store=store)
     remaining = status["remaining_by_size"]
     core = status["core_sizes"]
-    usual = _usual_stock_level(stock_df, category, day)
+    usual = _usual_stock_level(store, category, day)
     total = status["total_remaining"]
     share_of_usual = total / usual if usual else None
-    core_depleted = all(remaining[s] <= CORE_DEPLETED_MAX_UNITS for s in core)
+    # With no size data there are no core sizes, so no size run to break.
+    core_depleted = bool(core) and all(remaining[s] <= CORE_DEPLETED_MAX_UNITS for s in core)
 
-    if share_of_usual is not None and share_of_usual < STOCKOUT_MAX_SHARE:
+    if usual is None:
+        others_in_stock = any(u > CORE_DEPLETED_MAX_UNITS for s, u in remaining.items() if s not in core)
+        if all(u <= CORE_DEPLETED_MAX_UNITS for u in remaining.values()):
+            verdict = "stockout"
+        elif core_depleted and others_in_stock:
+            verdict = "broken_size_run"
+        else:
+            verdict = "healthy"
+    elif share_of_usual < STOCKOUT_MAX_SHARE:
         verdict = "stockout"
-    elif core_depleted and (share_of_usual is None or share_of_usual >= BROKEN_RUN_MIN_SHARE):
+    elif core_depleted and share_of_usual >= BROKEN_RUN_MIN_SHARE:
         verdict = "broken_size_run"
     elif core_depleted:
         verdict = "running_out"
@@ -215,29 +225,26 @@ def check_size_runs(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, stock_df
     }
 
 
-def get_stock_health_report(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, stock_df=None):
+def get_stock_health_report(day=None, hour=None, store=None):
     """Every category whose stock isn't healthy right now (for the alert banner)."""
-    if stock_df is None:
-        stock_df = load_stock_data()
-    report = [check_size_runs(c, day, hour, stock_df=stock_df) for c in CATEGORIES]
+    store, day, hour = resolve(store, day, hour)
+    report = [check_size_runs(c, day, hour, store=store) for c in store.categories]
     return [r for r in report if r["verdict"] != "healthy"]
 
 
-def suggest_supply_action(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, health=None,
-                          stock_df=None, sales_df=None):
+def suggest_supply_action(category, day=None, hour=None, health=None, store=None):
     """
     What to do about supply for a category that's out or has a broken size
     run, stated only as far as the delivery history actually shows it.
     Returns None if its stock is healthy.
     """
-    if stock_df is None:
-        stock_df = load_stock_data()
+    store, day, hour = resolve(store, day, hour)
     if health is None:
-        health = check_size_runs(category, day, hour, stock_df=stock_df)
+        health = check_size_runs(category, day, hour, store=store)
     if health["verdict"] == "healthy":
         return None
 
-    history = get_stock_history(category, day, hour, stock_df=stock_df, sales_df=sales_df)
+    history = get_stock_history(category, day, hour, store=store)
     last = history["deliveries_received"][-1] if history["deliveries_received"] else None
     missed = history["scheduled_deliveries_not_received"]
 
@@ -247,8 +254,10 @@ def suggest_supply_action(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, he
             why = f"the last delivery, on day {last['day']}, came without them"
         elif last:
             why = f"they've sold through since the last delivery, on day {last['day']}"
-        else:
+        elif store.has_stock_history:
             why = "no delivery has arrived this month"
+        else:
+            return f"Request a transfer of sizes {sizes} from a nearby store."
         return f"Request a transfer of sizes {sizes} from a nearby store ({why})."
 
     if missed:
@@ -258,71 +267,65 @@ def suggest_supply_action(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, he
     return "Request a replenishment or an inter-store transfer."
 
 
-def get_last_piece_alerts(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, stock_df=None, sales_df=None):
+def get_last_piece_alerts(day=None, hour=None, store=None):
     """
     Every size that dropped to exactly LAST_PIECE_THRESHOLD unit(s) on `day`
     up to `hour`, with the hour it happened. Fires once, at the moment of the
-    drop: stock just before an hour's sales (what's left + what sold that
-    hour) was above the threshold, and after that hour it is exactly at it.
-    Deliveries arrive before opening, so they're already in that "before".
+    drop: stock just before that count (what's left + what sold since the
+    previous count that day) was above the threshold, and at the count it is
+    exactly at it. Deliveries arrive before opening, so they're already in
+    that "before".
     """
-    if stock_df is None:
-        stock_df = load_stock_data()
-    if sales_df is None:
-        from kpi import load_sales_data
-        sales_df = load_sales_data()
+    store, day, hour = resolve(store, day, hour)
+    store.require("stock")
 
-    keys = ["day", "hour", "category", "size"]
-    today = (stock_df["day"] == day) & (stock_df["hour"] <= hour)
-    merged = stock_df[today].merge(
-        sales_df[(sales_df["day"] == day) & (sales_df["hour"] <= hour)][keys + ["units_sold"]],
-        on=keys,
-        how="left",
-    ).fillna({"units_sold": 0})
-    before_hour = merged["units_remaining"] + merged["units_sold"]
-    dropped = merged[
-        (merged["units_remaining"] == LAST_PIECE_THRESHOLD) & (before_hour > LAST_PIECE_THRESHOLD)
-    ]
+    counts_today = [h for h in store.stock_hours_by_day.get(day, []) if h <= hour]
+    today = store.sales[(store.sales["day"] == day) & (store.sales["hour"] <= hour)]
+    sold = {}  # (category, size) -> {hour: units sold}
+    for (c, s, sold_hour), units_sold in today.groupby(["category", "size", "hour"])["units_sold"].sum().items():
+        sold.setdefault((c, s), {})[sold_hour] = units_sold
 
-    return [
-        {
-            "category": row["category"],
-            "line": row["line"],
-            "size": str(row["size"]),
-            "is_core_size": str(row["size"]) in size_system_for(row["category"])["core"],
-            "day": int(row["day"]),
-            "hour": int(row["hour"]),
-            "units_remaining": LAST_PIECE_THRESHOLD,
-        }
-        for _, row in dropped.sort_values(["hour", "category"]).iterrows()
-    ]
+    alerts = []
+    for category in store.categories:
+        previous = None
+        for h in counts_today:
+            remaining = _remaining_by_size(store, category, day, h)
+            for size, units in remaining.items():
+                sold_since = sum(u for sold_hour, u in sold.get((category, size), {}).items()
+                                 if (previous is None or sold_hour > previous) and sold_hour <= h)
+                if units == LAST_PIECE_THRESHOLD and units + sold_since > LAST_PIECE_THRESHOLD:
+                    alerts.append({
+                        "category": category,
+                        "line": store.category_line[category],
+                        "size": size,
+                        "is_core_size": size in store.core_sizes[category],
+                        "day": day,
+                        "hour": h,
+                        "units_remaining": LAST_PIECE_THRESHOLD,
+                    })
+            previous = h
+    return sorted(alerts, key=lambda a: (a["hour"], a["category"]))
 
 
-def get_days_of_cover(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, stock_df=None,
-                      sales_df=None):
+def get_days_of_cover(category, day=None, hour=None, store=None):
     """
     A projection, not a fact: roughly how many days each size will last if it
     keeps selling at its average rate over the last 7 full days. Flags sizes
     likely to run out before the next scheduled delivery, so the team can act
     before the last piece, not at it.
     """
-    _validate(category, day, hour)
-    if stock_df is None:
-        stock_df = load_stock_data()
-    if sales_df is None:
-        from kpi import load_sales_data
-        sales_df = load_sales_data()
+    store, day, hour = resolve(store, day, hour)
+    _validate(store, category, day, hour)
 
-    remaining = get_stock_status(category, day, hour, stock_df=stock_df)["remaining_by_size"]
-    window = sales_df[
-        (sales_df["category"] == category) & (sales_df["day"] >= day - 7) & (sales_df["day"] < day)
-    ]
+    remaining = get_stock_status(category, day, hour, store=store)["remaining_by_size"]
+    sales = store.sales
+    window = sales[(sales["category"] == category) & (sales["day"] >= day - 7) & (sales["day"] < day)]
     days_in_window = min(7, day - 1)
-    daily_rate = window.groupby(window["size"].astype(str))["units_sold"].sum() / max(days_in_window, 1)
+    daily_rate = window.groupby("size")["units_sold"].sum() / max(days_in_window, 1)
 
-    next_delivery = next(
-        (d["day"] for d in month_calendar()[day:] if d["weekday"] == DELIVERY_WEEKDAY), None
-    )
+    next_delivery = None if store.delivery_weekday is None else next(
+        (d for d in range(day + 1, store.days_in_month + 1)
+         if store.weekday(d) == store.delivery_weekday), None)
     days_to_delivery = (next_delivery - day) if next_delivery else None
 
     sizes = []
@@ -352,18 +355,18 @@ def get_days_of_cover(category, day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, stock_
 
 # --- Verification output -------------------------------------------------------
 
-def _print_status(category):
-    s = get_stock_status(category)
+def _print_status(store, category):
+    s = get_stock_status(category, store=store)
     sizes = "  ".join(f"{size}:{units}" for size, units in s["remaining_by_size"].items())
-    print(f"\n{category} — stock now (day {TODAY_DAY}, {DEFAULT_CURRENT_HOUR}:00)")
+    print(f"\n{category} — stock now (day {store.today_day}, {store.default_hour}:00)")
     print(f"  {sizes}")
     print(f"  total {s['total_remaining']}, core ({'/'.join(s['core_sizes'])}) "
           f"{s['core_units_remaining']}, core sizes out: {s['core_sizes_out'] or 'none'}, "
           f"completely out: {s['is_completely_out']}")
 
 
-def _print_history(category):
-    h = get_stock_history(category)
+def _print_history(store, category):
+    h = get_stock_history(category, store=store)
     print(f"\n{category} — last 10 days of stock")
     print("  day   total   core")
     for row in h["daily_stock"]:
@@ -376,26 +379,26 @@ def _print_history(category):
           f"scheduled deliveries not received: {h['scheduled_deliveries_not_received'] or 'none'}")
 
 
-def _print_stock_health():
-    print(f"\nStock health, day {TODAY_DAY} {DEFAULT_CURRENT_HOUR}:00 (categories that aren't healthy)\n")
-    for r in get_stock_health_report():
+def _print_stock_health(store):
+    print(f"\nStock health, day {store.today_day} {store.default_hour}:00 (categories that aren't healthy)\n")
+    for r in get_stock_health_report(store=store):
         core = ", ".join(f"{s}:{u}" for s, u in r["core_remaining_by_size"].items())
         print(f"  {r['category']:<24} {r['verdict']:<16} core [{core}]  total {r['total_remaining']} "
               f"({r['total_as_pct_of_usual']}% of usual {r['usual_stock_level']})")
-    healthy = check_size_runs("TJM Denim Bottom")
+    healthy = check_size_runs("TJM Denim Bottom", store=store)
     print(f"  (control) TJM Denim Bottom: {healthy['verdict']}")
 
 
-def _print_last_piece_alerts():
-    alerts = get_last_piece_alerts()
-    print(f"\nLast-piece alerts today (day {TODAY_DAY}) up to {DEFAULT_CURRENT_HOUR}:00: {len(alerts)}\n")
+def _print_last_piece_alerts(store):
+    alerts = get_last_piece_alerts(store=store)
+    print(f"\nLast-piece alerts today (day {store.today_day}) up to {store.default_hour}:00: {len(alerts)}\n")
     for a in alerts:
         core = "  <- core size" if a["is_core_size"] else ""
         print(f"  {a['hour']}:00  {a['category']:<24} size {a['size']:<5} 1 left{core}")
 
 
-def _print_days_of_cover(category):
-    c = get_days_of_cover(category)
+def _print_days_of_cover(store, category):
+    c = get_days_of_cover(category, store=store)
     print(f"\n{category} — days of cover (projection), next delivery day "
           f"{c['next_scheduled_delivery_day']}")
     for s in c["sizes"]:
@@ -407,10 +410,11 @@ def _print_days_of_cover(category):
 
 
 if __name__ == "__main__":
+    demo, _, _ = resolve()
     for cat in ("Womens Knit Top", "THM Non Denim Bottom", "TJM Denim Bottom"):
-        _print_status(cat)
+        _print_status(demo, cat)
     for cat in ("Womens Knit Top", "THM Non Denim Bottom", "TJM Denim Bottom"):
-        _print_history(cat)
-    _print_stock_health()
-    _print_last_piece_alerts()
-    _print_days_of_cover("THM Polo")
+        _print_history(demo, cat)
+    _print_stock_health(demo)
+    _print_last_piece_alerts(demo)
+    _print_days_of_cover(demo, "THM Polo")

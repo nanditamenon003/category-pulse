@@ -14,12 +14,11 @@ import streamlit as st
 
 import tour
 import views
-from config import STORE_HOURS, STORE_NAME
-from ui import CSS, current_hour, esc, html_block, load_data, time_label, today_label
+from ui import CSS, current_hour, current_store, esc, html_block, time_label, today_label
 
 st.set_page_config(page_title="Category Pulse", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(CSS, unsafe_allow_html=True)
-load_data()  # builds the simulated data on a fresh deployment, once
+store = current_store()  # builds the simulated data on a fresh deployment, once
 
 PAGES = {
     "Today": st.Page(views.today_page, title="Today", icon=":material/today:", default=True),
@@ -40,10 +39,10 @@ current_page = st.navigation(list(PAGES.values()), position="top")
 hour = current_hour()
 with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
     html_block(f'<span class="cp-brand">Category Pulse</span>'
-               f'<span class="cp-datalabel">{esc(STORE_NAME)}</span>')
+               f'<span class="cp-datalabel">{esc(store.name)}</span>')
     with st.popover(f"{today_label()}, {time_label(hour)}", icon=":material/schedule:"):
         st.select_slider(
-            "Step through the day", options=STORE_HOURS, key="hour",
+            "Step through the day", options=store.hours, key="hour",
             format_func=time_label,
             help="Everything on the site shows the store as it was at this time.",
         )

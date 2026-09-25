@@ -10,6 +10,10 @@ before answering, the way a good analyst would.
 The provider is one setting in config.py (AI_PROVIDER). The code uses the
 Anthropic Messages API; DeepSeek's Anthropic-compatible endpoint runs the
 same code unchanged.
+
+The chat runs on the demo store only: a store's own uploaded data is never
+sent to an AI provider. Its tools still read through a Store, like the rest
+of the app.
 """
 
 import json
@@ -26,13 +30,11 @@ from config import (
     AI_PROVIDER,
     AI_PROVIDERS,
     CATEGORIES,
-    DAYS_IN_MONTH,
-    DEFAULT_CURRENT_HOUR,
     DEPARTMENTS,
     LINES,
     MAX_TOOL_ITERATIONS,
-    TODAY_DAY,
 )
+from store import resolve
 
 load_dotenv()
 
@@ -43,13 +45,13 @@ class AgentError(Exception):
     """Raised for problems the app should show as a friendly message, not a traceback."""
 
 
-def build_system_prompt(current_hour):
+def build_system_prompt(current_hour, store):
     now = "20:00, closing time" if current_hour == 19 else f"{current_hour + 1}:00"
     return f"""You are Category Pulse, an internal assistant for the manager and sales associates \
 of a single clothing store. You help the floor team act on category performance. You never talk \
 to customers. All data is simulated for this prototype.
 
-Where things stand: it is day {TODAY_DAY} of a {DAYS_IN_MONTH}-day month, and the time now is \
+Where things stand: it is day {store.today_day} of a {store.days_in_month}-day month, and the time now is \
 {now}. Tools only return data up to now. In tool results, "hour": 16 means the 16:00-17:00 \
 selling hour, so data "as of hour 16" runs to 17:00; when you mention the time, say {now}.
 
@@ -170,36 +172,36 @@ TOOLS = [
 ]
 
 
-def _build_tool_dispatch(current_hour):
+def _build_tool_dispatch(current_hour, store):
     """
-    Maps tool names to functions. Every tool works on today (TODAY_DAY) and
+    Maps tool names to functions. Every tool works on the store's today and
     never sees past `current_hour`: an hour the model asks for is capped at
     now, so the agent can't read sales that haven't happened yet.
     """
     def at(hour):
         return current_hour if hour is None else min(int(hour), current_hour)
 
-    day = TODAY_DAY
+    day, now, s = store.today_day, current_hour, store
     return {
         "get_category_pace": lambda category=None, line=None, hour=None:
-            kpi.get_category_pace(day, at(hour), category=category, line=line),
+            kpi.get_category_pace(day, at(hour), category=category, line=line, store=s),
         "get_today_pace": lambda line=None, hour=None:
-            kpi.get_today_pace(line=line, day=day, hour=at(hour)),
-        "get_contribution": lambda hour=None: kpi.get_contribution(day, at(hour)),
-        "get_stock_health_report": lambda: stock.get_stock_health_report(day, current_hour),
-        "check_size_runs": lambda category: stock.check_size_runs(category, day, current_hour),
-        "get_stock_status": lambda category: stock.get_stock_status(category, day, current_hour),
-        "get_stock_history": lambda category: stock.get_stock_history(category, day, current_hour),
-        "get_last_piece_alerts": lambda: stock.get_last_piece_alerts(day, current_hour),
-        "get_days_of_cover": lambda category: stock.get_days_of_cover(category, day, current_hour),
+            kpi.get_today_pace(line=line, day=day, hour=at(hour), store=s),
+        "get_contribution": lambda hour=None: kpi.get_contribution(day, at(hour), store=s),
+        "get_stock_health_report": lambda: stock.get_stock_health_report(day, now, store=s),
+        "check_size_runs": lambda category: stock.check_size_runs(category, day, now, store=s),
+        "get_stock_status": lambda category: stock.get_stock_status(category, day, now, store=s),
+        "get_stock_history": lambda category: stock.get_stock_history(category, day, now, store=s),
+        "get_last_piece_alerts": lambda: stock.get_last_piece_alerts(day, now, store=s),
+        "get_days_of_cover": lambda category: stock.get_days_of_cover(category, day, now, store=s),
         "get_footfall": lambda zone=None, category=None, line=None, hour=None:
-            kpi.get_footfall(zone=zone, category=category, line=line, day=day, hour=at(hour)),
+            kpi.get_footfall(zone=zone, category=category, line=line, day=day, hour=at(hour), store=s),
         "get_conversion_metrics": lambda category=None, line=None, zone=None:
             kpi.get_conversion_metrics(category=category, line=line, zone=zone,
-                                       day=day, hour=current_hour),
-        "get_staffing_recommendation": lambda: staffing.get_staffing_recommendation(day + 1),
-        "get_cross_sell_ideas": lambda: loyalty.get_cross_sell_ideas(day, current_hour),
-        "get_tier_playbook": lambda category: loyalty.get_tier_playbook(category),
+                                       day=day, hour=now, store=s),
+        "get_staffing_recommendation": lambda: staffing.get_staffing_recommendation(day + 1, store=s),
+        "get_cross_sell_ideas": lambda: loyalty.get_cross_sell_ideas(day, now, store=s),
+        "get_tier_playbook": lambda category: loyalty.get_tier_playbook(category, store=s),
     }
 
 
@@ -223,7 +225,7 @@ def get_client():
     return Anthropic(api_key=api_key)
 
 
-def ask(question, current_hour=DEFAULT_CURRENT_HOUR, client=None):
+def ask(question, current_hour=None, client=None):
     """
     Sends a question to the model with tools enabled, runs the tool-call loop
     until it has a final answer, and returns (answer_text, tool_call_log).
@@ -242,8 +244,9 @@ def ask(question, current_hour=DEFAULT_CURRENT_HOUR, client=None):
     except AgentError as e:
         return str(e), tool_call_log
 
-    dispatch = _build_tool_dispatch(current_hour)
-    system = build_system_prompt(current_hour)
+    store, _, current_hour = resolve(hour=current_hour)  # the demo store
+    dispatch = _build_tool_dispatch(current_hour, store)
+    system = build_system_prompt(current_hour, store)
     messages = [{"role": "user", "content": question}]
 
     def call_model():
@@ -314,7 +317,8 @@ def _friendly_api_error(error):
 
 def _terminal_loop():
     print(f"Category Pulse agent ({PROVIDER['name']}, model {PROVIDER['model']})")
-    print(f"Day {TODAY_DAY}, simulated time {DEFAULT_CURRENT_HOUR + 1}:00. Type 'quit' to exit.\n")
+    demo, day, hour = resolve()
+    print(f"Day {day}, simulated time {hour + 1}:00. Type 'quit' to exit.\n")
     while True:
         try:
             question = input("You: ").strip()

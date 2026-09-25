@@ -90,6 +90,8 @@ The chat code is the same for both: DeepSeek offers an Anthropic-compatible endp
 
 Each module can also be run on its own and prints its own checks, e.g. `python src/kpi.py` (pace table and contribution report), `python src/stock.py`, `python src/digest.py` (end-of-day summary), or `python src/agent.py` (terminal chat).
 
+`python tests/test_any_store.py` runs the whole engine on a made-up store that looks nothing like the demo (different lines, month and opening hours, stock counted once a day), and on a bare version with only daily sales totals. It checks that planted problems are found and that missing data is reported plainly, not guessed.
+
 ### Deploying (Streamlit Community Cloud, free)
 
 1. Sign in at [share.streamlit.io](https://share.streamlit.io) with GitHub and create an app from this repository, with the main file `src/app.py` and Python 3.11.
@@ -101,7 +103,8 @@ Each module can also be run on its own and prints its own checks, e.g. `python s
 ```
 category-pulse/
 ├── src/
-│   ├── config.py         all business rules and settings in one place (targets, thresholds, calendar, AI provider)
+│   ├── config.py         all business rules and settings in one place (thresholds, AI provider), plus the demo store
+│   ├── store.py          a store: its lines, targets, sizes, calendar and data; builds the demo or any store's own tables
 │   ├── generate_data.py  simulates the store month: sales, stock, deliveries, footfall, loyalty tiers
 │   ├── kpi.py            month-to-date pace, today's pace, contribution report, footfall, traffic vs conversion
 │   ├── stock.py          stock status and history, broken size runs, last-piece alerts, days of cover
@@ -111,8 +114,10 @@ category-pulse/
 │   ├── digest.py         the plain-English end-of-day summary
 │   ├── agent.py          the AI chat: tools, instructions, and the tool-calling loop
 │   ├── app.py            the web app's frame: top menu, time button, chat button
-│   ├── views.py          the six pages and the pop-ups (category detail, chat)
+│   ├── views.py          the pages and the pop-ups (category detail, chat)
+│   ├── tour.py           the guided tour
 │   └── ui.py             shared styling, building blocks and cached data lookups
+├── tests/test_any_store.py runs the engine on a different, made-up store
 ├── .streamlit/config.toml  theme (colours, hidden menus)
 ├── data/                   generated data (not stored in git; rebuilt from the seed)
 ├── .env.example            where API keys go (the real .env is never committed)

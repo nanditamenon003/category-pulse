@@ -6,27 +6,14 @@ Privacy by design: every recommendation here works at loyalty-tier level
 customer. The data holds only tier-level aggregates, and nothing here looks
 up, stores or reasons about any one shopper. This is a deliberate choice to
 avoid individual profiling, not a missing feature.
+
+Cross-sell ideas work without loyalty data too; they just can't name a tier.
 """
-
-import os
-
-import pandas as pd
 
 import kpi
 import stock
-from config import (
-    CATEGORIES,
-    CATEGORY_DEPARTMENT,
-    CATEGORY_LINE,
-    CATEGORY_PRODUCT,
-    COMPLEMENTS,
-    DEFAULT_CURRENT_HOUR,
-    SUBSTITUTES,
-    TODAY_DAY,
-)
-
-DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
-LOYALTY_PATH = os.path.join(DATA_DIR, "loyalty_tiers.csv")
+from config import COMPLEMENTS, SUBSTITUTES
+from store import resolve
 
 # How to say each offer at the till, in plain words.
 OFFER_AT_THE_TILL = {
@@ -37,26 +24,27 @@ OFFER_AT_THE_TILL = {
     "complimentary_service": "a free alteration",
 }
 
-KIDS_LINES = {"BB", "BG", "LB", "LG"}
+# Kids' lines are different ages (e.g. big boys vs little boys), so a kids'
+# category is only paired with categories in its own line.
+KIDS_DEPARTMENT = "Kidswear"
 
 
-def load_loyalty_data():
-    """Loads the tier-level loyalty data from disk."""
-    return pd.read_csv(LOYALTY_PATH)
+def _offer_words(offer_type):
+    return OFFER_AT_THE_TILL.get(offer_type, str(offer_type).replace("_", " "))
 
 
-def get_tier_playbook(category, loyalty_df=None):
+def get_tier_playbook(category, store=None):
     """
     Each loyalty tier's response profile for a category, ranked by how often
     that tier takes up a cross-sell, with the offer each tier responds to
     best, phrased as something an associate can say at the till.
     """
-    if category not in CATEGORIES:
+    store, _, _ = resolve(store)
+    if category not in store.categories:
         raise ValueError(f"Unknown category {category!r}")
-    if loyalty_df is None:
-        loyalty_df = load_loyalty_data()
+    store.require("loyalty")
 
-    rows = loyalty_df[loyalty_df["category"] == category].sort_values(
+    rows = store.loyalty[store.loyalty["category"] == category].sort_values(
         "cross_sell_response_rate", ascending=False
     )
     tiers = [
@@ -67,40 +55,42 @@ def get_tier_playbook(category, loyalty_df=None):
             "avg_basket_value": int(r["avg_basket_value"]),
             "avg_upt": float(r["avg_upt"]),
             "preferred_offer_type": r["preferred_offer_type"],
-            "offer_at_the_till": OFFER_AT_THE_TILL[r["preferred_offer_type"]],
+            "offer_at_the_till": _offer_words(r["preferred_offer_type"]),
         }
         for _, r in rows.iterrows()
     ]
     return {
         "category": category,
         "privacy_note": "Tier-level only; no individual customer data is used.",
-        "best_responding_tier": tiers[0]["tier"],
+        "best_responding_tier": tiers[0]["tier"] if tiers else None,
         "tiers_ranked_by_response": tiers,
     }
 
 
-def _eligible_partners(category, product_types, pace_by_category, health_by_category):
+def _eligible_partners(store, category, product_types, pace_by_category, health_by_category):
     """
     Categories of the given product types that are selling well (on pace or
-    ahead) and have their core sizes in stock. Adults can pair across lines
-    on the same floor; kids stay within their own line (different ages).
-    Best first: same line, then ahead of on pace, then by % vs pace.
+    ahead) and have their core sizes in stock (or no stock data to say
+    otherwise). Adults can pair across lines on the same floor; kids stay
+    within their own line (different ages). Best first: same line, then
+    ahead of on pace, then by % vs pace.
     """
-    line = CATEGORY_LINE[category]
+    line = store.category_line[category]
+    department = store.category_department[category]
     candidates = []
-    for other in CATEGORIES:
-        if other == category or CATEGORY_PRODUCT[other] not in product_types:
+    for other in store.categories:
+        if other == category or store.category_product[other] not in product_types:
             continue
-        if line in KIDS_LINES and CATEGORY_LINE[other] != line:
+        if department == KIDS_DEPARTMENT and store.category_line[other] != line:
             continue
-        if CATEGORY_DEPARTMENT[other] != CATEGORY_DEPARTMENT[category]:
+        if store.category_department[other] != department:
             continue
         pace = pace_by_category[other]
-        if pace["status"] not in ("on_pace", "ahead") or health_by_category[other] != "healthy":
+        if pace["status"] not in ("on_pace", "ahead") or health_by_category[other] not in ("healthy", "unknown"):
             continue
         candidates.append(pace)
     candidates.sort(key=lambda p: (
-        CATEGORY_LINE[p["category"]] != line,
+        store.category_line[p["category"]] != line,
         p["status"] != "ahead",
         -p["pct_vs_pace"],
     ))
@@ -112,18 +102,22 @@ def _who(tier):
 
 
 def _tier_pitch(playbook):
-    """The lead tier's pitch, plus how to handle non-members if they aren't the lead."""
+    """
+    The lead tier's pitch, plus how to handle non-members if they aren't the
+    lead. (None, "") when there's no loyalty data for the category.
+    """
+    if playbook is None or not playbook["tiers_ranked_by_response"]:
+        return None, ""
     best = playbook["tiers_ranked_by_response"][0]
     pitch = (f"Lead with {_who(best['tier'])} ({best['cross_sell_response_rate_pct']:.0f}% take up "
              f"cross-sells here): offer {best['offer_at_the_till']}.")
-    if best["tier"] != "Non-member":
-        non_member = next(t for t in playbook["tiers_ranked_by_response"] if t["tier"] == "Non-member")
+    non_member = next((t for t in playbook["tiers_ranked_by_response"] if t["tier"] == "Non-member"), None)
+    if best["tier"] != "Non-member" and non_member:
         pitch += f" For non-members, offer {non_member['offer_at_the_till']}."
     return best, pitch
 
 
-def get_cross_sell_ideas(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, statuses=("behind",),
-                         sales_df=None, stock_df=None, loyalty_df=None):
+def get_cross_sell_ideas(day=None, hour=None, statuses=("behind",), store=None):
     """
     Cross-sell ideas for every category whose month-to-date pace status is
     in `statuses` (by default only categories actually behind pace, per the
@@ -134,24 +128,26 @@ def get_cross_sell_ideas(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, statuses=("be
         meanwhile pair the sizes that are plentiful with a complementary piece
       - otherwise (a demand problem): pair it with a complementary category
         that is selling well, aimed at the tier most likely to respond
-    Each idea names a tier and an offer, phrased for use at the till.
+    Each idea names a tier and an offer (when there's loyalty data), phrased
+    for use at the till.
     """
-    if sales_df is None:
-        sales_df = kpi.load_sales_data()
-    if stock_df is None:
-        stock_df = stock.load_stock_data()
-    if loyalty_df is None:
-        loyalty_df = load_loyalty_data()
+    store, day, hour = resolve(store, day, hour)
 
-    pace_by_category = {p["category"]: p for p in kpi.get_category_pace(day, hour, sales_df=sales_df)}
-    health = {c: stock.check_size_runs(c, day, hour, stock_df=stock_df) for c in CATEGORIES}
-    verdict = {c: h["verdict"] for c, h in health.items()}
+    def playbook(category):
+        return get_tier_playbook(category, store=store) if store.has_loyalty else None
+
+    pace_by_category = {p["category"]: p for p in kpi.get_category_pace(day, hour, store=store)}
+    if store.has_stock:
+        health = {c: stock.check_size_runs(c, day, hour, store=store) for c in store.categories}
+        verdict = {c: h["verdict"] for c, h in health.items()}
+    else:
+        health, verdict = {}, {c: "unknown" for c in store.categories}
 
     ideas = []
     for category, pace in pace_by_category.items():
         if pace["status"] not in statuses:
             continue
-        product = CATEGORY_PRODUCT[category]
+        product = store.category_product[category]
         stock_verdict = verdict[category]
         idea = {
             "category": category,
@@ -162,32 +158,32 @@ def get_cross_sell_ideas(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, statuses=("be
         }
 
         if stock_verdict in ("stockout", "running_out"):
-            partners = _eligible_partners(category, SUBSTITUTES.get(product, []),
+            partners = _eligible_partners(store, category, SUBSTITUTES.get(product, []),
                                           pace_by_category, verdict)
             idea["type"] = "substitute"
             idea["supply_action"] = stock.suggest_supply_action(
-                category, day, hour, health=health[category], stock_df=stock_df, sales_df=sales_df)
+                category, day, hour, health=health[category], store=store)
             if partners:
                 partner = partners[0]["category"]
-                best, pitch = _tier_pitch(get_tier_playbook(partner, loyalty_df))
-                idea.update(partner=partner, lead_tier=best["tier"],
-                            offer_type=best["preferred_offer_type"])
+                best, pitch = _tier_pitch(playbook(partner))
+                idea.update(partner=partner, lead_tier=best and best["tier"],
+                            offer_type=best and best["preferred_offer_type"])
                 idea["at_the_till"] = (
                     f"{category} is sold out in most sizes, so don't lose the shopper: walk them "
                     f"to {partner}, which is selling well and in stock. {pitch}"
-                )
+                ).strip()
             else:
                 idea.update(partner=None, lead_tier=None, offer_type=None,
                             at_the_till=f"{category} is sold out and no in-stock substitute is "
                                         f"doing well; focus on getting stock back.")
 
         else:
-            partners = _eligible_partners(category, COMPLEMENTS.get(product, []),
+            partners = _eligible_partners(store, category, COMPLEMENTS.get(product, []),
                                           pace_by_category, verdict)
-            best, pitch = _tier_pitch(get_tier_playbook(category, loyalty_df))
+            best, pitch = _tier_pitch(playbook(category))
             partner = partners[0]["category"] if partners else None
-            idea.update(type="complement", partner=partner, lead_tier=best["tier"],
-                        offer_type=best["preferred_offer_type"])
+            idea.update(type="complement", partner=partner, lead_tier=best and best["tier"],
+                        offer_type=best and best["preferred_offer_type"])
             pairing = f"Pair it with {partner} as an outfit." if partner else \
                 "No complementary category is both selling well and in stock right now."
 
@@ -197,16 +193,16 @@ def get_cross_sell_ideas(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, statuses=("be
                 plentiful = ", ".join(s for s, u in h["other_sizes_remaining"].items() if u >= 5)
                 idea["type"] = "complement_in_available_sizes"
                 idea["supply_action"] = stock.suggest_supply_action(
-                    category, day, hour, health=h, stock_df=stock_df, sales_df=sales_df)
+                    category, day, hour, health=h, store=store)
                 idea["at_the_till"] = (
                     f"{category} is {abs(pace['pct_vs_pace']):.0f}% behind pace because sizes {missing} "
                     f"are gone. Until they're back, focus on shoppers who fit {plentiful}, where "
                     f"there's plenty of stock. {pairing} {pitch}"
-                )
+                ).strip()
             else:
                 idea["at_the_till"] = (
                     f"{category} is {abs(pace['pct_vs_pace']):.0f}% behind pace. {pairing} {pitch}"
-                )
+                ).strip()
         ideas.append(idea)
 
     return ideas
@@ -214,19 +210,19 @@ def get_cross_sell_ideas(day=TODAY_DAY, hour=DEFAULT_CURRENT_HOUR, statuses=("be
 
 # --- Verification output -------------------------------------------------------
 
-def _print_playbooks():
+def _print_playbooks(store):
     print("\nTier playbooks: best-responding tier and its offer vary by category\n")
     for category in ("THM Non Denim Bottom", "THT Woven Top", "Womens Knit Top", "TJM T-shirt",
                      "BB Knit Top"):
-        p = get_tier_playbook(category)
+        p = get_tier_playbook(category, store=store)
         ranked = ", ".join(f"{t['tier']} {t['cross_sell_response_rate_pct']:.0f}%"
                            for t in p["tiers_ranked_by_response"])
         best = p["tiers_ranked_by_response"][0]
         print(f"  {category:<22} {ranked:<52} -> {best['tier']}: {best['preferred_offer_type']}")
 
 
-def _print_ideas(title, **kwargs):
-    ideas = get_cross_sell_ideas(**kwargs)
+def _print_ideas(store, title, **kwargs):
+    ideas = get_cross_sell_ideas(store=store, **kwargs)
     print(f"\n{title}: {len(ideas)}\n")
     for i in ideas:
         print(f"  [{i['category']} | {i['status']} {i['pct_vs_pace']}% | stock: {i['stock_verdict']} "
@@ -237,7 +233,8 @@ def _print_ideas(title, **kwargs):
 
 
 if __name__ == "__main__":
-    _print_playbooks()
-    _print_ideas("Cross-sell ideas for categories behind pace")
-    _print_ideas("For illustration, 'drifting' categories (not triggered by default)",
+    demo, _, _ = resolve()
+    _print_playbooks(demo)
+    _print_ideas(demo, "Cross-sell ideas for categories behind pace")
+    _print_ideas(demo, "For illustration, 'drifting' categories (not triggered by default)",
                  statuses=("drifting",))

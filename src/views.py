@@ -15,7 +15,8 @@ import streamlit as st
 
 import agent
 import tour
-from config import CATEGORIES, DEMO_QUESTION_LIMIT, LINES, STORE_HOURS, TODAY_DAY, month_calendar
+from config import DEMO_QUESTION_LIMIT
+from store import WEEKDAY_NAMES
 from ui import (
     AMBER,
     BORDER,
@@ -34,6 +35,7 @@ from ui import (
     inr,
     cross_sell_at,
     current_hour,
+    current_store,
     diagnoses_at,
     digest_at,
     esc,
@@ -81,9 +83,11 @@ def _start_here():
     # Hidden once dismissed, and while the tour runs (the tour card does its job).
     if st.session_state.get("hide_start_here") or st.session_state.get("tour_step") is not None:
         return
+    s = current_store()
     html_block(
         '<div class="cp-panel"><div class="cp-panel-title">Start here</div>'
-        f'<p>This is a demo store with simulated data, shown on day {TODAY_DAY} of a 31-day May. '
+        f'<p>This is a demo store with simulated data, shown on day {s.today_day} of a '
+        f'{s.days_in_month}-day {s.month_name}. '
         'The sales, stock and visitors are made up but behave like a real store, and a few real '
         'problems are hidden in the numbers.</p>'
         '<p><b>New here?</b> Take the 2-minute tour, or explore on your own: tap '
@@ -124,7 +128,7 @@ def _compact_row(tone, title, text):
 
 def today_page():
     hour = current_hour()
-    page_title("Today", f"The store at {time_label(hour)} on day {TODAY_DAY} of the month.")
+    page_title("Today", f"The store at {time_label(hour)} on day {current_store().today_day} of the month.")
     _start_here()
 
     pace = pace_at(hour)
@@ -382,7 +386,6 @@ def pace_chart(pace):
     ).configure(background=PAGE)
 
 
-DEPARTMENT_FILTER = ["All", "Menswear", "Womenswear", "Kidswear"]
 STATUS_FILTER = {"Behind": "behind", "Drifting": "drifting", "On pace": "on_pace",
                  "Ahead": "ahead", "Too early": "too_early"}
 SORT_ORDERS = {
@@ -462,7 +465,8 @@ def categories_page():
     ])
     with st.container(horizontal=True, wrap=True, vertical_alignment="center", gap="small"):
         with st.popover(f"Filters · {active} on" if active else "Filters", icon=":material/tune:"):
-            department = st.segmented_control("Department", DEPARTMENT_FILTER, default="All",
+            department = st.segmented_control("Department", ["All"] + current_store().departments,
+                                              default="All",
                                               key="cat_department") or "All"
             statuses = st.pills("Status", list(STATUS_FILTER), selection_mode="multi",
                                 key="cat_status")
@@ -487,16 +491,13 @@ def categories_page():
         # theme=None so Streamlit's default chart styling (gridlines etc.) doesn't override ours.
         st.altair_chart(pace_chart(shown), width="stretch", theme=None)
     elif sort == "By line":
-        for line, dept in LINES.items():
+        for line, dept in current_store().lines.items():
             in_line = [(p, False) for p in shown if p["line"] == line]
             if in_line:
                 html_block(heading(line, dept))
                 _card_row(in_line, line, diags)
     else:
         _card_row([(p, True) for p in shown], "sorted", diags)
-
-
-WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
 
 # --- Stock page ---------------------------------------------------------------------------------
@@ -519,7 +520,7 @@ def stock_page():
     problems = stock_health_at(hour)
     pieces = last_pieces_at(hour)
     risky, next_delivery = risky_sizes_at(hour)
-    delivery_weekday = WEEKDAYS[month_calendar()[next_delivery - 1]["weekday"]] if next_delivery else ""
+    delivery_weekday = WEEKDAY_NAMES[current_store().weekday(next_delivery)] if next_delivery else ""
 
     html_block('<div class="cp-kpis">'
                + kpi_card("Stock problems", f"{len(problems)}", "stockouts and broken size runs",
@@ -628,7 +629,7 @@ def floor_page():
                    for z in zones)
                + "</div>")
 
-    rec, patterns = staffing_for(TODAY_DAY + 1)
+    rec, patterns = staffing_for(current_store().today_day + 1)
     html_block(heading(f"Tomorrow: {rec['weekday']}",
                        f"from the last {len(rec['based_on_days'])} {rec['day_type']}s"))
     for note in rec["notes"]:
@@ -680,13 +681,13 @@ def sell_page():
             category_dialog(category)
 
     html_block(heading("Loyalty tier playbook", "pick any category"))
-    options = list(ideas) + [c for c in CATEGORIES if c not in ideas]
+    options = list(ideas) + [c for c in current_store().categories if c not in ideas]
     chosen = st.selectbox("Category", options, key="sell_category", label_visibility="collapsed")
     _tier_table(playbook_for(chosen))
 
     with st.expander("Best-responding tier for every category"):
         best = []
-        for category in CATEGORIES:
+        for category in current_store().categories:
             top = playbook_for(category)["tiers_ranked_by_response"][0]
             best.append({"Category": category, "Best tier": top["tier"],
                          "Takes up cross-sells": f"{top['cross_sell_response_rate_pct']:.0f}%",
@@ -696,7 +697,8 @@ def sell_page():
 
 def summary_page():
     hour = current_hour()
-    is_close = hour == STORE_HOURS[-1]
+    s = current_store()
+    is_close = hour == s.hours[-1]
     moment = "close" if is_close else time_label(hour).replace(":", "")
     page_title("End-of-day summary" if is_close else "Summary so far today",
                "The plain-English summary that replaces the evening spreadsheet, and the month's "
@@ -706,11 +708,12 @@ def summary_page():
     html_block('<div class="cp-digest">'
                + "".join(f"<p>{esc(p)}</p>" for p in text.split("\n\n")) + "</div>")
     st.download_button("Download summary", data=text, icon=":material/download:",
-                       file_name=f"category-pulse-summary-day{TODAY_DAY}-{moment}.txt",
+                       file_name=f"category-pulse-summary-day{s.today_day}-{moment}.txt",
                        mime="text/plain")
 
     report = contribution_at(hour)
-    html_block(heading("May contribution, month to date", f"as of day {TODAY_DAY}, {time_label(hour)}")
+    html_block(heading(f"{s.month_name} contribution, month to date",
+                       f"as of day {s.today_day}, {time_label(hour)}")
                + '<div class="cp-check">Totals checked automatically: '
                + esc("; ".join(report["checks_passed"])) + ".</div>")
 
@@ -749,7 +752,7 @@ def summary_page():
                      })
     st.download_button("Download contribution report (CSV)", icon=":material/download:",
                        data=pd.DataFrame(categories).to_csv(index=False),
-                       file_name=f"category-pulse-contribution-day{TODAY_DAY}-{moment}.csv",
+                       file_name=f"category-pulse-contribution-day{s.today_day}-{moment}.csv",
                        mime="text/csv")
 
 
@@ -791,6 +794,7 @@ GUIDE_TERMS = [
 
 
 def guide_page():
+    s = current_store()
     page_title("Guide", "How to read Category Pulse, in plain English.")
     if st.button("Start the guided tour", key="guide_tour", icon=":material/tour:"):
         tour.start()
@@ -799,7 +803,8 @@ def guide_page():
                + '<div class="cp-panel"><p>A demo of an assistant for a clothing store\'s floor '
                  'team. It watches every category against its monthly target, finds what\'s '
                  'genuinely behind, works out why, and suggests what to do while there\'s still '
-                 f'time. The store is simulated: it\'s day {TODAY_DAY} of a 31-day May, and every '
+                 f'time. The store is simulated: it\'s day {s.today_day} of a {s.days_in_month}-day '
+                 f'{s.month_name}, and every '
                  'number is generated. No real store or customer data is used.</p></div>')
 
     html_block(heading("What the statuses mean")
