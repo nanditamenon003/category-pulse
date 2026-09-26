@@ -310,18 +310,31 @@ def get_last_piece_alerts(day=None, hour=None, store=None):
 def get_days_of_cover(category, day=None, hour=None, store=None):
     """
     A projection, not a fact: roughly how many days each size will last if it
-    keeps selling at its average rate over the last 7 full days. Flags sizes
-    likely to run out before the next scheduled delivery, so the team can act
-    before the last piece, not at it.
+    keeps selling at its average rate over the last 7 full days it was on the
+    shelf. Days a size was sold out are left out of that average, so a size
+    that was missing for a week doesn't look slow-selling. Flags sizes likely
+    to run out before the next scheduled delivery, so the team can act before
+    the last piece, not at it.
     """
     store, day, hour = resolve(store, day, hour)
     _validate(store, category, day, hour)
 
     remaining = get_stock_status(category, day, hour, store=store)["remaining_by_size"]
     sales = store.sales
-    window = sales[(sales["category"] == category) & (sales["day"] >= day - 7) & (sales["day"] < day)]
-    days_in_window = min(7, day - 1)
-    daily_rate = window.groupby("size")["units_sold"].sum() / max(days_in_window, 1)
+    window_days = list(range(max(1, day - 7), day))
+    window = sales[(sales["category"] == category) & sales["day"].isin(window_days)]
+    sold = window.groupby(["size", "day"])["units_sold"].sum()
+
+    def rate_for(size):
+        # A day counts if the size had stock at the previous count, or sold that day
+        # (a morning delivery can restock it). Unknown stock days count too.
+        days = []
+        for d in window_days:
+            prev = _closing_hour(store, d - 1)
+            had_stock = prev is None or store.stock_lookup.get((category, d - 1, prev), {}).get(size, 0) > 0
+            if had_stock or sold.get((size, d), 0) > 0:
+                days.append(d)
+        return sum(sold.get((size, d), 0) for d in days) / len(days) if days else 0.0
 
     next_delivery = None if store.delivery_weekday is None else next(
         (d for d in range(day + 1, store.days_in_month + 1)
@@ -330,7 +343,7 @@ def get_days_of_cover(category, day=None, hour=None, store=None):
 
     sizes = []
     for size, units in remaining.items():
-        rate = float(daily_rate.get(size, 0.0))
+        rate = float(rate_for(size))
         cover = units / rate if rate > 0 else None
         sizes.append({
             "size": size,
@@ -348,7 +361,8 @@ def get_days_of_cover(category, day=None, hour=None, store=None):
         "category": category,
         "as_of": {"day": day, "hour": hour},
         "next_scheduled_delivery_day": next_delivery,
-        "note": "Projection: assumes each size keeps selling at its last-7-day average.",
+        "note": ("Projection: assumes each size keeps selling at its average over the last 7 days "
+                 "it was on the shelf."),
         "sizes": sizes,
     }
 

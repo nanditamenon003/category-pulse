@@ -370,10 +370,12 @@ AI_PROVIDERS = {
 }
 AI_MAX_TOKENS = 1500
 
-# Questions each visitor can ask the chat per browser session. The public
-# demo runs on the owner's prepaid API credit, so this stops one visitor
-# from using it all up.
-DEMO_QUESTION_LIMIT = 10
+# The chat runs on the owner's prepaid AI credit (a question costs a fraction
+# of a US cent). Each signed-in account can ask this many questions a day,
+# and everyone together at most ALL_QUESTIONS_PER_DAY, so no one visitor, or
+# a busy day, can use it all up. Counted on the server (usage.py).
+QUESTIONS_PER_DAY = 10
+ALL_QUESTIONS_PER_DAY = 150
 
 # Safety cap on how many rounds of tool calls the agent can make while
 # answering a single question, so a confused loop can't run forever.

@@ -170,6 +170,12 @@ header[data-testid="stHeader"] {{ background: {PAGE}; border-bottom: 1px solid {
 .cp-tour-text {{ font-size: 14px; color: {TEXT}; line-height: 1.55; }}
 .st-key-tour_card {{ margin-bottom: 8px; }}
 
+/* On phones the page menu sits behind a small arrow button: give it a visible "Menu" label. */
+[data-testid="stExpandSidebarButton"] {{ width: auto !important; height: 34px !important; gap: 4px;
+    padding: 0 12px 0 8px !important; border: 1px solid {BORDER} !important; border-radius: 8px !important;
+    background: {CARD} !important; }}
+[data-testid="stExpandSidebarButton"]::after {{ content: "Menu"; font-size: 14px; font-weight: 700; color: {TEXT}; }}
+
 /* Welcome page */
 .cp-hero {{ max-width: 760px; margin: 28px 0 20px; }}
 .cp-hero-brand {{ font-size: 15px; font-weight: 700; color: {TEXT}; margin-bottom: 16px; }}

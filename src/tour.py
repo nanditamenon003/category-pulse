@@ -66,7 +66,7 @@ TOUR = [
         "text": ("The 30-second summary that replaces the evening spreadsheet, plus the month's "
                  "contribution report, both downloadable. And on every page, Ask Category Pulse "
                  "(bottom right) answers questions from the same numbers, showing how it got each "
-                 "answer. That's the tour."),
+                 "answer (sign in to use it). That's the tour."),
         "highlight": ".cp-digest, .st-key-chat_fab button",
     },
 ]

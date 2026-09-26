@@ -9,6 +9,7 @@ category detail and the chat. Only one pop-up can be open at a time, so
 
 import hashlib
 import json
+import uuid
 
 import altair as alt
 import pandas as pd
@@ -18,7 +19,8 @@ import account
 import agent
 import tour
 import upload
-from config import DEMO_QUESTION_LIMIT
+import usage
+from config import QUESTIONS_PER_DAY
 from store import WEEKDAY_NAMES, StoreDataError
 from ui import (
     AMBER,
@@ -466,7 +468,7 @@ def _tier_table(playbook):
         {
             "Tier": t["tier"],
             "Takes up cross-sells": f"{t['cross_sell_response_rate_pct']:.0f}%",
-            "Share of shoppers": f"{t['share_of_transactions_pct']}%",
+            "Share of bills": f"{t['share_of_transactions_pct']}%",
             "Offer at the till": t["offer_at_the_till"],
         }
         for t in playbook["tiers_ranked_by_response"]
@@ -1159,7 +1161,8 @@ def guide_page():
                + '<div class="cp-panel"><p>Ask Category Pulse answers by looking up the store\'s '
                  'numbers with the same calculations the pages use, and never guesses a figure. '
                  'Under each answer, "How I got this" lists every lookup and the numbers it '
-                 f'returned. You can ask up to {DEMO_QUESTION_LIMIT} questions per visit.</p></div>')
+                 f'returned. Once you\'re signed in, you can ask up to {QUESTIONS_PER_DAY} questions a day.'
+                 '</p></div>')
 
 
 # --- Chat pop-up -----------------------------------------------------------------------------
@@ -1184,6 +1187,18 @@ def _queue_suggestion():
     if label:
         st.session_state["chat_pending"] = _suggestions(current_store())[label]
     st.session_state["chat_chip"] = None
+
+
+def _chat_needs_sign_in():
+    """Guests are asked to sign in before using the chat, so daily limits can hold."""
+    if not account.is_configured() or account.is_signed_in():
+        return False
+    html_block('<div class="cp-panel"><div class="cp-panel-title">Sign in to ask the AI</div>'
+               f'<p>The AI chat comes with a free account: up to {QUESTIONS_PER_DAY} questions a day, '
+               'each answered from the store\'s numbers with a note of how it was worked out. '
+               'Everything else here works without one.</p></div>')
+    st.button("Log in or create account", key="chat_signup", type="primary", on_click=account.sign_in)
+    return True
 
 
 def _agree_to_chat(store_id):
@@ -1216,12 +1231,13 @@ def _chat_notice(store):
 @st.dialog("Ask Category Pulse", width="large")
 def chat_dialog():
     store = current_store()
-    if not _chat_notice(store):
+    if _chat_needs_sign_in() or not _chat_notice(store):
         return
+    # Daily questions are counted per account (or per visit, where sign-in isn't set up).
+    person = account.person_id() or st.session_state.setdefault("visitor_id", uuid.uuid4().hex)
     hour = current_hour()
     history_key = f"chat_{store.id}"  # each store keeps its own conversation
     st.session_state.setdefault(history_key, [])
-    st.session_state.setdefault("questions_asked", 0)
 
     # Filled in at the end, so the "questions left" count includes this answer.
     status_line = st.empty()
@@ -1240,10 +1256,15 @@ def chat_dialog():
                         'Each answer shows how it was worked out.</div>', unsafe_allow_html=True)
 
         if question:
-            if st.session_state["questions_asked"] >= DEMO_QUESTION_LIMIT:
+            left, everyone_done = usage.questions_left(person)
+            if everyone_done:
                 turn = {"question": question, "calls": [],
-                        "answer": (f"You've used the {DEMO_QUESTION_LIMIT} questions allowed per visit. "
-                                   f"Everything else on the site still works.")}
+                        "answer": ("The AI chat has answered as many questions as it can today. Try "
+                                   "again tomorrow; everything else on the site still works.")}
+            elif left == 0:
+                turn = {"question": question, "calls": [],
+                        "answer": (f"You've asked your {QUESTIONS_PER_DAY} questions for today. You can "
+                                   f"ask more tomorrow; everything else on the site still works.")}
             else:
                 # Show the question with a spinner while the AI works, then swap in the answer.
                 waiting = st.empty()
@@ -1252,14 +1273,14 @@ def chat_dialog():
                     with st.spinner("Checking the numbers..."):
                         answer, calls = agent.ask(question, current_hour=hour, store=store)
                 waiting.empty()
-                st.session_state["questions_asked"] += 1
+                usage.record_question(person)
                 turn = {"question": question, "answer": answer, "calls": calls}
             st.session_state[history_key].append(turn)
             _render_turn(turn)
 
-    left = max(DEMO_QUESTION_LIMIT - st.session_state["questions_asked"], 0)
+    left, _ = usage.questions_left(person)
     status_line.caption(f"Answers are built from the store's own numbers as of {time_label(hour)}. "
-                        f"AI: {agent.PROVIDER['name']} · {left} of {DEMO_QUESTION_LIMIT} questions left.")
+                        f"AI: {agent.PROVIDER['name']} · {left} of {QUESTIONS_PER_DAY} questions left today.")
 
 
 def _render_turn(turn):

@@ -56,6 +56,13 @@ def is_guest():
     return not is_signed_in() and st.session_state.get("guest", False)
 
 
+def person_id():
+    """A stable id for the signed-in person (for the daily chat limit), or None."""
+    if not is_signed_in():
+        return None
+    return st.user.get("sub") or st.user.get("email")
+
+
 def first_name():
     """The person's first name if Auth0 knows it (e.g. from Google), otherwise None."""
     user = st.user

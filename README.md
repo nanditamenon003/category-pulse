@@ -26,7 +26,8 @@
 - **Guided tour:** "Take the 2-minute tour" walks through the site in seven stops on the Sample Store. It moves between pages by itself and outlines what to look at on each one.
 
 - **Category detail:** tap any category for a pop-up with four tabs: *Why*, *Stock by size*, *Shoppers* and *Sell*.
-- **Chat:** the **Ask Category Pulse** button (bottom right) opens the AI chat. On your own data it asks once per visit before sending any figures to the AI.
+- **Chat:** the **Ask Category Pulse** button (bottom right) opens the AI chat, for signed-in users (up to 10 questions a day each). On your own data it asks once per visit before sending any figures to the AI.
+- **On a phone:** the pages are behind the **Menu** button, top left.
 - **Time:** the time button (top right) steps through the day, and every page follows it.
 - **Account:** the account button (top right) shows who is signed in, with **Log out**.
 
@@ -132,7 +133,7 @@ Each module can also be run on its own and prints its own checks, e.g. `python s
 
 1. Sign in at [share.streamlit.io](https://share.streamlit.io) with GitHub and create an app from this repository, with the main file `src/app.py` and Python 3.11.
 2. Under **Advanced settings → Secrets**, add `DEEPSEEK_API_KEY = "your-key"` and, below it, the `[auth]` settings above, with `redirect_uri` set to the live address + `/oauth2callback`.
-3. Deploy. The app limits each visitor to a few chat questions (`DEMO_QUESTION_LIMIT` in `src/config.py`), so one visitor can't use up the API credit.
+3. Deploy. The chat is for signed-in users only, with daily limits counted on the server (`QUESTIONS_PER_DAY` per account and `ALL_QUESTIONS_PER_DAY` for everyone, in `src/config.py`), so neither one visitor nor a busy day can use up the API credit. A page refresh doesn't reset them.
 
 ## Project structure
 
@@ -152,6 +153,7 @@ category-pulse/
 │   ├── agent.py          the AI chat: tools, instructions, and the tool-calling loop
 │   ├── app.py            the web app's frame: top menu, time and account buttons, chat button
 │   ├── account.py        the welcome page, sign-in with Auth0, log out, and guest mode
+│   ├── usage.py          daily limits on AI chat questions
 │   ├── views.py          the pages and the pop-ups (welcome guide, category detail, chat)
 │   ├── tour.py           the guided tour
 │   └── ui.py             shared styling, building blocks and cached data lookups
