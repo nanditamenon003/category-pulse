@@ -14,6 +14,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+import account
 import agent
 import tour
 import upload
@@ -930,14 +931,19 @@ def _upload_preview(store, notes):
 def your_data_page():
     page_title("Your data", "See your own store in Category Pulse: fill in the Excel template, upload "
                             "it, and every page switches to your numbers.")
-    html_block('<div class="cp-panel"><p>Until you upload your own data, the pages show the '
-               '<b>Sample Store</b>: a made-up store with realistic numbers and a few problems '
+    mine = st.session_state.get("my_store")
+    greeting = (f"Welcome, {esc(account.first_name())}. " if account.is_signed_in() and mine is None
+                else "")
+    html_block(f'<div class="cp-panel"><p>{greeting}Until you upload your own data, the pages show '
+               'the <b>Sample Store</b>: a made-up store with realistic numbers and a few problems '
                'hidden in them, so you can see what Category Pulse does.</p>'
                '<p><b>Before you upload:</b> only use real company figures with your manager\'s '
                'approval. Your file is read for this session only and isn\'t saved, and the AI chat '
                'isn\'t used with uploaded data.</p></div>')
-
-    mine = st.session_state.get("my_store")
+    if mine is None and st.button("Explore the Sample Store", key="explore_sample",
+                                  icon=":material/storefront:"):
+        request_store(False)
+        st.switch_page(tour.PAGES["Today"])
     if mine is not None:
         showing = not current_store().is_demo
         html_block(heading("Your store")
@@ -971,6 +977,15 @@ def your_data_page():
             sample = upload.sample_bytes()
         st.download_button("Download the sample file", data=sample, mime=XLSX,
                            file_name="category-pulse-sample-store.xlsx", icon=":material/download:")
+
+    if account.is_guest():
+        html_block(heading("2. Upload it")
+                   + '<div class="cp-panel"><p>Create a free account to upload your own store\'s '
+                     'data. It only takes a minute.</p></div>')
+        if account.is_configured():
+            st.button("Log in or create account", key="guest_signup", type="primary",
+                      on_click=account.sign_in)
+        return
 
     html_block(heading("2. Upload it", "the filled-in template, or one CSV file per sheet, e.g. sales.csv"))
     files = st.file_uploader("Upload your data", type=["xlsx", "csv"], accept_multiple_files=True,
