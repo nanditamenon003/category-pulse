@@ -202,7 +202,6 @@ def test_bad_tables():
     late_stock.loc[0, "date"] = date(2026, 6, 25)
     messages = [
         raises(StoreDataError, lambda: build_store(targets, two_months)),
-        raises(StoreDataError, lambda: build_store(targets, no_target)),
         raises(StoreDataError, lambda: build_store(targets, text_units)),
         raises(StoreDataError, lambda: build_store(targets, sales, late_stock)),
         raises(StoreDataError, lambda: build_store(targets.drop(columns="target"), sales)),
@@ -210,6 +209,11 @@ def test_bad_tables():
     print("\nTables it refuses, and what it says:")
     for m in messages:
         print(f"  - {m}")
+
+    # A category with no target isn't refused: its rows are left out, with a warning.
+    kept = build_store(targets, no_target)
+    assert "Mens Socks" not in kept.categories and any("Socks" in w for w in kept.warnings), kept.warnings
+    print(f"\nAccepted with a warning: {kept.warnings[0]}")
 
 
 if __name__ == "__main__":

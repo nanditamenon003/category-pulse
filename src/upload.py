@@ -17,7 +17,7 @@ import functools
 import hashlib
 import io
 import re
-from datetime import date, datetime, time
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -118,14 +118,63 @@ def _plain(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
-def _hour(value):
-    """10, 10.0, '10', '10:00', '10:00-11:00' or a time -> 10. Blank stays blank."""
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return None
-    if isinstance(value, (time, datetime)):
-        return value.hour
-    match = re.match(r"\s*(\d{1,2})", str(value))
-    return int(match.group(1)) if match else value  # unreadable: build_store says so
+def _table_for(sheet_name):
+    """Which table a sheet or file holds, from its name: 'Sales', 'sales.csv', 'Sales report May'."""
+    plain = _plain(sheet_name)
+    if plain in SHEETS:
+        return SHEETS[plain]
+    return next((table for key, table in SHEETS.items() if key in plain), None)
+
+
+def _find_header(rows, table):
+    """
+    The row that holds the column headings: exported reports often have a
+    title and a date range above the table. It's the first of the top 20
+    rows with at least two headings this table uses. None if there isn't one.
+    """
+    wanted = 1 if table == "settings" else 2
+    for i, row in enumerate(rows[:20]):
+        known = sum(_plain(cell) in COLUMNS.get(table, {}) or (table == "settings" and _plain(cell) == "setting")
+                    for cell in row if cell is not None and str(cell).strip() and str(cell) != "nan")
+        if known >= wanted:
+            return i
+    return None
+
+
+def _with_header(raw, table, sheet, notes):
+    """A sheet read without headings -> a table with the right heading row."""
+    raw = raw.dropna(how="all")
+    if raw.empty:
+        return raw
+    rows = raw.values.tolist()
+    at = _find_header(rows, table)
+    if at is None:
+        if table == "settings":
+            return raw
+        raise StoreDataError(f"Couldn't find the column headings in \"{sheet}\". The table should start "
+                             f"with a row of headings like Date, Line, Category and Units.")
+    if at > 0:
+        notes.append(f"\"{sheet}\": skipped {at} row{'s' if at > 1 else ''} above the headings.")
+    header = [str(c).strip() if c is not None and str(c) != "nan" else f"Unnamed {i}"
+              for i, c in enumerate(rows[at])]
+    return pd.DataFrame(rows[at + 1:], columns=header).dropna(how="all")
+
+
+def _read_csv(name, data):
+    """A CSV file as rows of cells, whatever its encoding."""
+    import csv
+
+    for encoding in ("utf-8-sig", "cp1252"):
+        try:
+            text = data.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        raise StoreDataError(f"{name} couldn't be read as text.")
+    rows = [row for row in csv.reader(io.StringIO(text)) if any(cell.strip() for cell in row)]
+    width = max((len(r) for r in rows), default=0)
+    return pd.DataFrame([r + [None] * (width - len(r)) for r in rows]).replace({"": None})
 
 
 def _read_files(files):
@@ -135,23 +184,20 @@ def _read_files(files):
         lower = name.lower()
         if lower.endswith((".xlsx", ".xlsm")):
             try:
-                sheets = pd.read_excel(io.BytesIO(data), sheet_name=None, engine="openpyxl")
+                sheets = pd.read_excel(io.BytesIO(data), sheet_name=None, engine="openpyxl", header=None)
             except Exception as e:
                 raise StoreDataError(f"{name} couldn't be opened as an Excel file ({e}).")
         elif lower.endswith(".csv"):
-            try:
-                sheets = {re.sub(r"\.csv$", "", name, flags=re.I): pd.read_csv(io.BytesIO(data))}
-            except Exception as e:
-                raise StoreDataError(f"{name} couldn't be read as a CSV file ({e}).")
+            sheets = {re.sub(r"\.csv$", "", name, flags=re.I): _read_csv(name, data)}
         else:
             raise StoreDataError(f"{name} isn't an Excel (.xlsx) or CSV file.")
-        for sheet, df in sheets.items():
-            table = SHEETS.get(_plain(sheet))
+        for sheet, raw in sheets.items():
+            table = _table_for(sheet)
             if table is None:
                 if _plain(sheet) not in ("read me", "readme", "instructions"):
                     notes.append(f"Skipped the sheet \"{sheet}\" (not one of the template's sheets).")
                 continue
-            df = df.dropna(how="all")
+            df = _with_header(raw, table, sheet, notes)
             if not df.empty:
                 tables[table] = df
     return tables, notes
@@ -167,10 +213,7 @@ def _rename(df, table, notes):
             ignored.append(str(column))
     if ignored and not all(c.startswith("Unnamed") for c in ignored):
         notes.append(f"{table.title()}: ignored the column(s) {', '.join(ignored)}.")
-    df = df[list(mapping)].rename(columns=mapping)
-    if "hour" in df.columns:
-        df["hour"] = df["hour"].map(_hour)
-    return df
+    return df[list(mapping)].rename(columns=mapping)
 
 
 def _settings(df):
@@ -209,8 +252,10 @@ def _settings(df):
 def read_upload(files):
     """
     Reads uploaded files ([(name, bytes)]: one Excel template, or CSV files
-    named after the tables) into a Store. Returns (store, notes). Raises
-    StoreDataError with a plain explanation if the data can't be used.
+    named after the tables) into a Store. Returns (store, notes): notes are
+    small things about how the file was read, while store.warnings are
+    things to check about the data. Raises StoreDataError listing every
+    problem if the data can't be used.
     """
     tables, notes = _read_files(files)
     missing = [t.title() for t in ("targets", "sales") if t not in tables]

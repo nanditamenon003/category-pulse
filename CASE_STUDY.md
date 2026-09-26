@@ -11,7 +11,7 @@ A fashion store sells across dozens of categories (polos, chinos, women's knit t
 The store's system had the data. What was missing was the last step: turning numbers into decisions while there was still time to act.
 
 - **It happened too late.** The sheet was built at the end of the day, after the selling hours were gone.
-- **"Balance to do" ignored the calendar.** A gap of 166 units sounds worse than a gap of 52. But in the simulated month, the category with the −166 gap (Men Casual Polos) is *on pace* and will finish fine, while the −52 one (Men Casual Trousers, the chinos) is 19% behind and in real trouble. Without knowing how much of the month is left, a raw gap ranks problems in the wrong order.
+- **"Balance to do" ignored the calendar.** A gap of 166 units sounds worse than a gap of 52. But in the simulated month, the category with the −166 gap (Men Casual Polos) is *on pace* and will finish fine, while the −52 one (Men Casual Trousers, the chinos) is 20% behind and in real trouble. Without knowing how much of the month is left, a raw gap ranks problems in the wrong order.
 - **The "why" was guesswork.** A category falling behind could mean fewer shoppers, an empty shelf, missing sizes or poor service, and each needs a different fix.
 - **Some problems never showed in the totals at all.** A category can hold plenty of stock while the sizes most people wear have run out. The total looks healthy, so nobody checks the sizes, and the category quietly stops selling.
 
@@ -22,7 +22,7 @@ Category Pulse sits on top of the store's existing system and answers four quest
 1. **Is each category on track?** Month-to-date pace for every category, shown as a status in words (Behind, Drifting, On pace, Ahead, Too early), along with how many units a day it now needs vs what it's actually selling.
 2. **What needs action right now?** Alerts for stockouts, broken size runs, last pieces on the shelf, and sizes likely to run out before the next delivery.
 3. **Why is it behind, and what do we do?** For each struggling category, one likely cause with the evidence behind it, and one concrete action. For example:
-   > *Men Casual Trousers is 19% behind and has a broken size run: plenty on the shelf, but not the sizes most people need. Tomorrow: request a transfer of sizes 32 and 34 from a nearby store (the last delivery, on day 18, came without them).*
+   > *Men Casual Trousers is 20% behind and has a broken size run: plenty on the shelf, but not the sizes most people need. Tomorrow: request a transfer of sizes 32 and 34 from a nearby store (the last delivery, on day 18, came without them).*
 4. **How do we win back sales?** Cross-sell ideas aimed at the loyalty tier most likely to respond, tomorrow's staffing by floor zone, and a short end-of-day summary that replaces the evening spreadsheet.
 
 A manager can also just ask a question. An AI assistant answers it by looking up the real numbers, and a "How I got this" panel shows every lookup it made.
@@ -39,7 +39,7 @@ And it isn't tied to the Sample Store it comes with. A manager can fill in an Ex
 
 ## 4. Key design decisions
 
-**Month-to-date, not hour-by-hour.** The original idea tracked each category hour by hour against a daily target. Real targets are monthly, though, and many categories sell only a few units a day, so hourly pace per category is mostly noise. Pace is tracked month-to-date. Hour-by-hour tracking is kept only for whole lines (e.g. all of womenswear), where volumes are large enough to mean something.
+**Month-to-date, not hour-by-hour.** The original idea tracked each category hour by hour against a daily target. Real targets are monthly, though, and many categories sell only a few units a day, so hourly pace per category is mostly noise. Pace is tracked month-to-date. Hour-by-hour tracking is kept only for whole lines (e.g. all of womenswear), where volumes are large enough to mean something. Days are also weighted by how busy they are, so a category doesn't look "ahead" just after a weekend or "behind" just before one: for a store's own data, that weekday pattern is learned from its sales.
 
 **The 15% threshold, plus a check for normal ups and downs.** A category is "behind" when it's more than 15% under pace. That's a business rule, chosen because a category more than 15% behind late in the month rarely recovers without intervention. But at small volumes, 15% can be pure chance: 0 sold against 1.8 expected reads as "−100%". So the gap must *also* be bigger than normal randomness to count as behind. A category past the line but not clearly beyond chance is shown as "Drifting" (amber): worth watching, not yet proven. This stopped the dashboard from turning red every morning.
 
@@ -65,7 +65,7 @@ And it isn't tied to the Sample Store it comes with. A manager can fill in an Ex
 
 In the simulated month, the value is mostly **time**:
 
-- **Chinos:** the core waist sizes ran out on day 16. On day 17 the category still looked "on pace" (−11%); it only crossed into "behind" in the last week. The broken-size-run alert would have flagged it about a week earlier, while a size transfer could still have saved the month.
+- **Chinos:** the core waist sizes ran out on day 16. On day 17 the category still looked "on pace" (−14%); it only crossed into "behind" in the last week. The broken-size-run alert would have flagged it about a week earlier, while a size transfer could still have saved the month.
 - **Women Tops:** the scheduled delivery on day 18 never arrived, and the shelf was empty by day 23. On day 17 the category was on pace. A "scheduled delivery not received" check on day 18 gives five days' warning before the stockout.
 - **Daily routine:** the end-of-day spreadsheet becomes a short summary that's already calculated, already checked (the contribution report verifies its own totals, so a broken formula can't silently drop rows), and already explained.
 

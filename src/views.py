@@ -96,7 +96,8 @@ def _your_store_note(s):
         f'close of day {s.today_day}. It\'s read for this session only and isn\'t saved. To keep it '
         'private, the AI chat and the tour aren\'t used with your own data. Switch stores at the top '
         'of the page.</p>'
-        '</div>'
+        + "".join(f'<p class="cp-small">Note: {esc(w)}</p>' for w in s.warnings)
+        + '</div>'
     )
 
 
@@ -133,7 +134,7 @@ def _problem_row(p, diag):
         f'{progress_bar(p["units_sold_so_far"], p["monthly_target"], p["expected_units_by_now"])}'
         f'<div class="cp-small">{p["units_sold_so_far"]} of {p["monthly_target"]} · '
         f'{abs(p["pct_vs_pace"]):.0f}% {"behind" if p["pct_vs_pace"] < 0 else "ahead of"} pace · '
-        f'needs {p["needed_units_per_day"]:.1f}/day, selling {p["actual_units_per_day"]:.1f}/day</div>'
+        f'{esc(_needs_text(p))}</div>'
         f'<div class="cp-row-text">{esc(evidence)}</div>'
         f'</div><div class="cp-chev">&rsaquo;</div></div>'
     )
@@ -144,6 +145,13 @@ def _when_dropped(alert):
     if len(current_store().stock_hours_by_day.get(alert["day"], [])) > 1:
         return f"since {alert['hour']}:00-{alert['hour'] + 1}:00"
     return "by today's close"
+
+
+def _needs_text(p):
+    """What it takes from here, or that the month is over."""
+    if p.get("month_finished"):
+        return f"month finished, sold {p['actual_units_per_day']:.1f}/day"
+    return f"needs {p['needed_units_per_day']:.1f}/day, selling {p['actual_units_per_day']:.1f}/day"
 
 
 def _compact_row(tone, title, text):
@@ -177,7 +185,9 @@ def today_page():
 
     html_block('<div class="cp-kpis">'
                + kpi_card("Month so far", f"{sold:,}", f"of about {expected:,.0f} expected by now")
-               + kpi_card("Month-end at this rate", f"{projected:,}", f"target {target:,} (a projection)")
+               + (kpi_card("Month result", f"{sold:,}", f"of the {target:,} target")
+                  if pace and pace[0]["month_finished"] else
+                  kpi_card("Month-end at this rate", f"{projected:,}", f"target {target:,} (a projection)"))
                + kpi_card("Need action", f"{len(behind)} behind", f"{len(drifting)} drifting",
                           tone="red" if behind else "")
                + kpi_card("Today so far", f"{today_sold}", f"of about {today_expected:.0f} by now")
@@ -212,7 +222,7 @@ def today_page():
     if drifting:
         html_block(heading("Keep an eye on", "slipping, but could still be normal ups and downs"))
         for p in drifting:
-            text = f"{abs(p['pct_vs_pace']):.0f}% behind pace, needs {p['needed_units_per_day']:.1f}/day"
+            text = f"{abs(p['pct_vs_pace']):.0f}% behind pace, {_needs_text(p).split(',')[0]}"
             if clickable(f"drift_{slug(p['category'])}", _compact_row("amber", p["category"], text),
                          f"Open {p['category']}"):
                 category_dialog(p["category"])
@@ -259,10 +269,13 @@ def _why_tab(p, diag):
                + kpi_card("Expected by now", f"{p['expected_units_by_now']:.0f}",
                           f"{p['pct_vs_pace']:+.0f}% vs pace")
                + kpi_card("Selling per day", f"{p['actual_units_per_day']:.1f}",
+                          "the month is over" if p["month_finished"] else
                           f"needs {p['needed_units_per_day']:.1f}/day to hit target")
-               + kpi_card("Month-end at this rate",
-                          f"{p['projected_month_end_if_current_rate_continues']}",
-                          "a projection, not a result")
+               + (kpi_card("Month result", f"{p['units_sold_so_far']}", f"of {p['monthly_target']} target")
+                  if p["month_finished"] else
+                  kpi_card("Month-end at this rate",
+                           f"{p['projected_month_end_if_current_rate_continues']}",
+                           "a projection, not a result"))
                + "</div>"
                + progress_bar(p["units_sold_so_far"], p["monthly_target"], p["expected_units_by_now"]))
 
@@ -861,7 +874,7 @@ def _read_upload(files):
         store, notes = upload.read_upload(files)
         st.session_state["upload_result"] = {"ok": True, "store": store, "notes": notes}
     except StoreDataError as e:
-        st.session_state["upload_result"] = {"ok": False, "error": str(e)}
+        st.session_state["upload_result"] = {"ok": False, "problems": e.problems}
 
 
 def _feature_row(name, on, hint):
@@ -881,6 +894,10 @@ def _upload_preview(store, notes):
                + kpi_card("Units sold so far", f"{int(store.sales['units_sold'].sum()):,}",
                           f"against {sum(store.targets.values()):,} for the month")
                + "</div>")
+
+    if store.warnings:
+        html_block('<div class="cp-alert amber"><div class="cp-alert-title">Check these before you continue'
+                   '</div><ul>' + "".join(f"<li>{esc(w)}</li>" for w in store.warnings) + "</ul></div>")
 
     html_block(heading("What your data switches on")
                + '<div class="cp-panel">'
@@ -974,9 +991,13 @@ def your_data_page():
     if result is None:
         return
     if not result["ok"]:
-        html_block('<div class="cp-alert"><div class="cp-alert-title">That file can\'t be used yet</div>'
-                   f'<ul><li>{esc(result["error"])}</li><li>Fix it in the file and upload it again.'
-                   '</li></ul></div>')
+        problems = result["problems"]
+        title = ("That file can\'t be used yet" if len(problems) == 1
+                 else f"{len(problems)} things to fix before this file can be used")
+        html_block(f'<div class="cp-alert"><div class="cp-alert-title">{title}</div><ul>'
+                   + "".join(f"<li>{esc(p)}</li>" for p in problems)
+                   + "</ul></div>"
+                   + '<div class="cp-small">Fix them in the file and upload it again.</div>')
         return
     _upload_preview(result["store"], result["notes"])
 
@@ -998,9 +1019,9 @@ GUIDE_TERMS = [
              "now. Month-to-date, because targets are monthly."),
     ("Needs per day", "How many units a day the category must sell from now on to hit its "
                       "target, next to what it's actually selling."),
-    ("Month-end at this rate", "A projection, not a result: where the month lands if the current "
-                               "daily rate simply continues. It can't know about stockouts or a "
-                               "month-end push."),
+    ("Month-end at this rate", "A projection, not a result: where the month lands if the rest of it "
+                               "keeps the same pace against plan. It can't know about stockouts or "
+                               "a month-end push."),
     ("Core sizes", "The sizes most shoppers need, such as M and L in men's tops or waists 32 and "
                    "34 in men's bottoms."),
     ("Stockout", "Almost nothing left to sell in any size."),

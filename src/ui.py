@@ -77,6 +77,7 @@ header[data-testid="stHeader"] {{ background: {PAGE}; border-bottom: 1px solid {
 .cp-alert-title {{ font-size: 14px; font-weight: 700; color: {TEXT}; margin-bottom: 4px; }}
 .cp-alert ul {{ margin: 0; padding-left: 18px; }}
 .cp-alert li {{ font-size: 13px; color: {TEXT}; margin: 2px 0; }}
+.cp-alert.amber {{ border-left-color: {AMBER}; }}
 
 .cp-counts {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 0; }}
 .cp-count {{ font-size: 13px; color: {TEXT}; }}

@@ -46,6 +46,10 @@ def _month_paragraph(store, day, hour, pace):
     standing = "right on pace" if abs(pct) < 3 else f"{abs(pct):.0f}% {'ahead' if pct > 0 else 'behind'}"
     weekday = WEEKDAY_NAMES[store.weekday(day)]
     moment = f"Close of day {day}" if hour == store.hours[-1] else f"Day {day} at {hour + 1}:00"
+    if pace and pace[0].get("month_finished"):
+        result = sold / target * 100 if target else 0
+        return (f"{moment} ({weekday}), the end of the month. The store sold {sold:,} units against "
+                f"its {target:,} target ({result:.0f}%).")
     return (f"{moment} ({weekday}), {store.days_in_month - day} days left. The store has sold "
             f"{sold:,} units against about {expected:,.0f} expected, {standing}; at the current rate it "
             f"would finish near {projected:,} of its {target:,} target.")

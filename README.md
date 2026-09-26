@@ -60,6 +60,8 @@ The **Your data** page has an Excel template with a *Read me* sheet explaining e
 - **Required:** *Targets* (line, category, monthly target) and *Sales* (date, line, category, units).
 - **Optional, each switching on more:** hours, sizes, rupee values and bill counts in *Sales*; a *Stock* sheet (one count is enough, a daily count also shows deliveries); a *Visitors* sheet (per floor, by day or hour); a *Loyalty* sheet (tier level only); and *Settings* (store name, delivery day, sale days).
 - Column names are matched loosely (for example "Qty" works for "Units", and day-first dates like 24/05/2026 are read correctly), so an export from the store's own system needs little tidying. CSV files work too, one per sheet.
+- Ordinary spreadsheet habits are fine: report titles above the table, numbers like 1,200, times like 2 PM, names in different capitals, returns as negative units, and a stock count taken the next morning. Categories without a target are left out with a note, and every problem in a file is listed at once.
+- If an export doesn't start on the 1st of the month, the upload warns that the missing days count as no sales.
 - Before switching over, the page shows which features the data supports and what would switch the rest on. Anything a page can't show is explained ("Not in your data: stock counts..."), never guessed.
 - **Privacy:** uploaded data is read for the visitor's session only and not saved. "Remove my data" clears it. The **AI chat and the tour stay with the Sample Store**, so uploaded figures are never sent to an AI provider. Only upload real company figures with the owner's approval.
 
@@ -154,6 +156,6 @@ category-pulse/
 - The Sample Store is simulated. Uploads work for any store, one month at a time, but the template is generic: a specific system's export may need its columns renamed to match.
 - Uploaded data is read as at the close of its latest day. Stock alerts are only as detailed as the stock counts supplied (a daily count gives "by today's close", not the hour).
 - When core sizes aren't given, they're learned from sales, which can pick the wrong sizes when sales are few. The upload page shows them so they can be checked and corrected in the template.
-- Projections are simple run-rates, clearly labelled.
+- Projections assume the rest of the month keeps the same pace against plan, and are clearly labelled.
 - The AI chat works on the Sample Store only. Each question is answered on its own (no conversation memory), and answers take roughly 5 to 30 seconds while the AI looks things up.
 - A real-data pilot would need the store's approval, and an AI provider the company approves.

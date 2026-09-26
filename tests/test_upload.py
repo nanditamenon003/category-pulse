@@ -1,9 +1,11 @@
 """
 Checks the "Your data" upload path end to end.
 
-  - The sample file (the demo month written into the template) reads back
-    as the same store: identical pace, stock problems, diagnoses,
-    contribution and deliveries as the demo at the close of the day.
+  - The sample file (the Sample Store's month written into the template)
+    reads back as the same store: identical sales, targets, contribution,
+    stock problems and deliveries. Pace is within a few percent: an upload
+    learns how busy each weekday is from its own sales, where the Sample
+    Store uses the weekday pattern it was simulated with.
   - CSV files with loosely named columns ("Qty", day-first dates) work.
   - The empty template and broken files are refused with a plain message.
 
@@ -34,18 +36,24 @@ def test_sample_round_trip():
     assert (set(s.sale_days), s.delivery_weekday) == (set(d.sale_days), d.delivery_weekday)
     assert all(on for _, on, _ in upload.feature_checklist(s))
 
-    assert kpi.get_category_pace(store=s) == kpi.get_category_pace(hour=close, store=d)
+    ours, theirs = kpi.get_category_pace(store=s), kpi.get_category_pace(hour=close, store=d)
+    for a, b in zip(ours, theirs):
+        assert (a["category"], a["units_sold_so_far"], a["monthly_target"]) == \
+               (b["category"], b["units_sold_so_far"], b["monthly_target"])
+        assert abs(a["expected_units_by_now"] - b["expected_units_by_now"]) <= 0.03 * b["expected_units_by_now"] + 0.5
     assert kpi.get_contribution(store=s) == kpi.get_contribution(hour=close, store=d)
     health = [(r["category"], r["verdict"]) for r in stock.get_stock_health_report(store=s)]
     assert health == [(r["category"], r["verdict"])
                       for r in stock.get_stock_health_report(hour=close, store=d)]
     causes = {x["category"]: x["cause"] for x in diagnosis.diagnose_store(store=s)}
-    assert causes == {x["category"]: x["cause"] for x in diagnosis.diagnose_store(hour=close, store=d)}
+    for category in ("Men Casual Trousers", "Women Tops", "Little Boys Tops"):
+        assert causes[category] == diagnosis.diagnose(category, hour=close, store=d)["cause"], category
     chinos = stock.get_stock_history("Men Casual Trousers", store=s)["deliveries_received"]
     assert [(x["day"], x["core_sizes_missing"]) for x in chinos] == [(4, ["32", "34"]), (11, ["32", "34"]),
                                                                        (18, ["32", "34"])]
     print(f"Sample file ({len(upload.sample_bytes()) // 1024} KB) reads back as the demo store at close:")
-    print(f"  pace, contribution, stock problems {health}, and all 29 diagnoses match.")
+    print(f"  sales, contribution, stock problems {health} and deliveries match; pace within 3%;")
+    print(f"  the planted problems get the same causes.")
 
 
 def test_csv_with_loose_headers():
@@ -102,15 +110,66 @@ def test_filled_template():
     print(f"  found the trousers' broken size run and the kurtas' stockout; only feature off: {off[0]}")
 
 
+def test_forgiving_uploads():
+    """Ordinary spreadsheet habits are accepted; things worth knowing come back as warnings."""
+    import io
+
+    import pandas as pd
+    from store import _parse_hour, build_store
+
+    assert [_parse_hour(v) for v in ("10", 10, "10:00-11:00", "2 PM", "2:30 pm", "12 PM", "12 AM", "9am")] == \
+        [10, 10, 10, 14, 14, 12, 0, 9]
+    targets, sales, stock_df, _ = make_tables()
+
+    messy = pd.concat([sales, sales.head(1).assign(product="Socks")])
+    messy["product"] = messy["product"].str.lower()
+    messy = messy.astype({"units": object})
+    messy.loc[messy.index[1], "units"] = "1,200"
+    late = stock_df.copy()
+    late.loc[late.index[-1], "date"] = pd.Timestamp("2026-06-19")
+    s = build_store(targets, messy, late)
+    assert "Mens Shirt" in s.categories and s.sales["units_sold"].max() >= 1200
+    assert any("socks" in w.lower() for w in s.warnings) and any("closing stock" in w for w in s.warnings)
+
+    partial = build_store(targets, sales[pd.to_datetime(sales["date"]).dt.day >= 10])
+    assert any("start on day 10" in w for w in partial.warnings)
+
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        pd.DataFrame([["Sales report"], ["01 Jun to 18 Jun 2026"]]).to_excel(
+            writer, sheet_name="Sales report June", index=False, header=False)
+        sales.rename(columns={"date": "Bill date", "line": "Line", "product": "Product type",
+                              "units": "Qty", "hour": "Time"}).to_excel(
+            writer, sheet_name="Sales report June", index=False, startrow=3)
+        targets.rename(columns={"line": "Line", "product": "Category", "target": "Target"}).to_excel(
+            writer, sheet_name="Targets", index=False)
+    store, notes = upload.read_upload([("june.xlsx", buffer.getvalue())])
+    assert int(store.sales["units_sold"].sum()) == int(sales["units"].sum())
+    assert any("skipped 2 rows" in n for n in notes)
+
+    bad = sales.astype({"units": object, "hour": object}).copy()
+    bad.loc[bad.index[0], "units"] = "five"
+    bad.loc[bad.index[1], "hour"] = "lunch"
+    try:
+        build_store(targets.assign(target=0), bad)
+    except StoreDataError as e:
+        assert len(e.problems) == 3, e.problems
+    else:
+        raise AssertionError("expected problems")
+    print("\nForgiving uploads: '2 PM', '1,200', lower-case names, an unknown category, next-morning "
+          "stock, a partial month\n  and report titles above the table all read correctly; three "
+          "problems in one file are reported together.")
+
+
 def test_refusals():
     targets, sales, _, _ = make_tables()
     tcsv = targets.to_csv(index=False).encode()
-    bad = sales.copy()
-    bad.loc[0, "product"] = "Socks"
+    bad = sales.astype({"units": object})
+    bad.loc[bad.index[0], "units"] = "five"
     cases = {
         "the empty template": [("template.xlsx", upload.template_bytes())],
         "a Word file": [("notes.docx", b"hello")],
-        "sales for a category with no target": [("targets.csv", tcsv),
+        "a word where a number should be": [("targets.csv", tcsv),
                                                 ("sales.csv", bad.to_csv(index=False).encode())],
         "only a Targets sheet": [("targets.csv", tcsv)],
     }
@@ -129,5 +188,6 @@ if __name__ == "__main__":
     test_csv_with_loose_headers()
     test_template_headers_are_all_recognised()
     test_filled_template()
+    test_forgiving_uploads()
     test_refusals()
     print("\nAll checks passed.")

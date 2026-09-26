@@ -94,19 +94,27 @@ def get_category_pace(day=None, hour=None, category=None, line=None, store=None)
     Month-to-date pace for every category (or one category, or one line), as
     of `hour` on `day`.
 
-    Expected pace = monthly target x share of the month elapsed. Over a whole
-    month, busy weekends and quiet weekdays mostly even out, so counting days
-    is fair (unlike hours within one day). Today counts as a partial day,
-    using how much of a typical day has usually sold by this hour.
+    Expected pace = monthly target x the share of the month's plan that
+    should be done by now. Days are weighted by how busy they are (weekends
+    and sale days carry more of a month than quiet weekdays), so a category
+    doesn't look "ahead" just after a weekend or "behind" just before one.
+    Today counts as a partial day, using how much of a typical day has
+    usually sold by this hour.
 
     Returns a list of dicts with actuals, the expected pace, a status, and
-    clearly-labelled projections for the rest of the month.
+    clearly-labelled projections for the rest of the month. Once the month
+    is over, "month_finished" is True and nothing more is needed per day.
     """
     store, day, hour = resolve(store, day, hour)
     _validate_moment(store, day, hour)
 
-    days_elapsed = (day - 1) + typical_share_of_day_sold(store, day, hour)
+    share_of_today = typical_share_of_day_sold(store, day, hour)
+    days_elapsed = (day - 1) + share_of_today
     days_remaining = store.days_in_month - days_elapsed
+    month_finished = days_remaining < 1e-9
+    weights = store.day_weights
+    plan_done = ((sum(weights[d] for d in range(1, day)) + weights[day] * share_of_today)
+                 / sum(weights.values()))
     sold_by_category = _as_of(store.sales, day, hour).groupby("category")["units_sold"].sum()
 
     selected = [
@@ -120,13 +128,14 @@ def get_category_pace(day=None, hour=None, category=None, line=None, store=None)
     for cat in selected:
         target = store.targets[cat]
         sold = int(sold_by_category.get(cat, 0))
-        expected = target * days_elapsed / store.days_in_month
+        expected = target * plan_done
         status, pct, beyond_noise = classify_pace(expected, sold)
 
         actual_per_day = sold / days_elapsed
         still_needed = max(0, target - sold)
-        needs_per_day = still_needed / days_remaining if days_remaining > 0 else float(still_needed)
-        unlikely = still_needed > 0 and needs_per_day > REQUIRED_RATE_STRETCH * actual_per_day
+        needs_per_day = 0.0 if month_finished else still_needed / days_remaining
+        unlikely = (not month_finished and still_needed > 0
+                    and needs_per_day > REQUIRED_RATE_STRETCH * actual_per_day)
 
         results.append({
             "category": cat,
@@ -144,11 +153,11 @@ def get_category_pace(day=None, hour=None, category=None, line=None, store=None)
             "actual_units_per_day": round(actual_per_day, 1),
             "needed_units_per_day": round(needs_per_day, 1),
             "unlikely_without_action": unlikely,
-            # A projection, not a fact: assumes the current daily rate simply
-            # continues. It can't know about stockouts or a month-end push.
-            "projected_month_end_if_current_rate_continues": round(
-                sold + actual_per_day * days_remaining
-            ),
+            "month_finished": month_finished,
+            # A projection, not a fact: assumes the rest of the month keeps the
+            # same pace against plan. It can't know about stockouts or a
+            # month-end push. Once the month is over, it is simply the result.
+            "projected_month_end_if_current_rate_continues": round(sold / plan_done),
         })
     return results
 

@@ -18,8 +18,8 @@ import calendar
 import functools
 import os
 import re
-from dataclasses import dataclass
-from datetime import date, timedelta
+from dataclasses import dataclass, field
+from datetime import date, datetime, time, timedelta
 
 import pandas as pd
 
@@ -41,7 +41,14 @@ class MissingData(ValueError):
 
 
 class StoreDataError(ValueError):
-    """A store's tables can't be used as they are; the message says what to fix."""
+    """
+    A store's tables can't be used as they are. `problems` lists everything
+    to fix; the message joins them, one per line.
+    """
+
+    def __init__(self, problems):
+        self.problems = [problems] if isinstance(problems, str) else list(problems)
+        super().__init__("\n".join(self.problems))
 
 
 @dataclass(eq=False)
@@ -72,6 +79,7 @@ class Store:
     stock: object              # DataFrame of day, hour, category, size, units_remaining; or None
     footfall: object           # DataFrame of day, hour, zone, visitors; or None
     loyalty: object            # DataFrame of tier-level loyalty figures per category; or None
+    warnings: list = field(default_factory=list)  # things worth checking about the data
 
     # --- Calendar ------------------------------------------------------------------
 
@@ -300,26 +308,67 @@ def _sales_with_full_size_run(sales, stock, category, sizes):
     return rows.groupby("size")["units_sold"].sum().to_dict()
 
 
-def _require_columns(df, table, columns):
+class _Check:
+    """
+    Collects everything wrong with a store's tables, so the person sees every
+    problem at once instead of fixing one, re-uploading and meeting the next.
+    Problems stop the upload; warnings are things it could work around.
+    """
+
+    def __init__(self):
+        self.problems, self.warnings = [], []
+
+    def problem(self, message):
+        self.problems.append(message)
+
+    def warn(self, message):
+        self.warnings.append(message)
+
+    def stop_if_problems(self):
+        if self.problems:
+            raise StoreDataError(self.problems)
+
+
+def _examples(values, limit=3):
+    values = list(dict.fromkeys(str(v) for v in values))
+    shown = ", ".join(repr(v) for v in values[:limit])
+    return shown + (f" and {len(values) - limit} more" if len(values) > limit else "")
+
+
+def _require_columns(df, table, columns, check):
     missing = [c for c in columns if c not in df.columns]
     if missing:
-        raise StoreDataError(f"The {table} table is missing: {', '.join(missing)}.")
+        check.problem(f"The {table} table is missing: {', '.join(missing)}.")
+    return not missing
 
 
 def _text(series):
     return series.astype(str).str.strip()
 
 
-def _numbers(df, column, table, allow_blank=False):
-    values = pd.to_numeric(df[column], errors="coerce")
-    bad = values.isna() & (df[column].notna() if allow_blank else True)
+def _normal_name(text):
+    """For matching names regardless of capitals and spacing: ' Men  casual ' -> 'men casual'."""
+    return re.sub(r"\s+", " ", str(text)).strip().lower()
+
+
+def _clean_number_text(values):
+    """'1,200', '₹ 3,400', 'Rs. 500' -> numbers; blanks stay blank."""
+    if values.dtype != object:
+        return values
+    text = values.astype(str).str.replace(r"(?i)rs\.?|₹|,|\s", "", regex=True)
+    return text.where(values.notna() & (text != ""))
+
+
+def _numbers(df, column, table, check, allow_blank=False, allow_negative=False):
+    raw = df[column]
+    values = pd.to_numeric(_clean_number_text(raw), errors="coerce")
+    bad = values.isna() & (raw.notna() if allow_blank else True)
     if bad.any():
-        example = df.loc[bad, column].iloc[0]
-        raise StoreDataError(f"In the {table} table, the {column} column has something that isn't "
-                             f"a number: {example!r}.")
-    if (values < 0).any():
-        raise StoreDataError(f"In the {table} table, the {column} column has a negative number.")
-    return values
+        check.problem(f"In the {table} table, the {column} column has things that aren't numbers: "
+                      f"{_examples(raw[bad])}.")
+    if not allow_negative and (values < 0).any():
+        check.problem(f"In the {table} table, the {column} column has negative numbers.")
+    return values.fillna(0) if bad.any() else values
 
 
 def _has(df, column):
@@ -342,37 +391,70 @@ def _parse_dates(values):
     return dates
 
 
-def _days(df, table, month_start, days_in_month):
-    dates = _parse_dates(df["date"])
+def _days(dates, raw, table, month_start, check):
+    """Day of the month for each row; problems for unreadable dates or other months."""
     if dates.isna().any():
-        example = df.loc[dates.isna(), "date"].iloc[0]
-        raise StoreDataError(f"The {table} table has a date that can't be read: {example!r}.")
-    outside = (dates.dt.year != month_start.year) | (dates.dt.month != month_start.month)
+        check.problem(f"The {table} table has dates that can't be read: {_examples(raw[dates.isna()])}.")
+    known = dates.dropna()
+    outside = (known.dt.year != month_start.year) | (known.dt.month != month_start.month)
     if outside.any():
-        raise StoreDataError(f"The {table} table has dates outside "
-                             f"{calendar.month_name[month_start.month]} {month_start.year}. "
-                             f"Use one month at a time.")
-    return dates.dt.day.astype(int)
+        months = sorted({f"{calendar.month_name[d.month]} {d.year}" for d in known[outside]})
+        check.problem(f"The {table} table has dates outside {calendar.month_name[month_start.month]} "
+                      f"{month_start.year} (also {', '.join(months)}). Use one month at a time.")
+    return dates.dt.day.fillna(1).astype(int)
 
 
-def _hours(df, table, fallback):
-    """Whole-hour slots (10 = 10:00-11:00); rows without hours count as the close of the day."""
+def _parse_hour(value):
+    """
+    An hour slot from how shops write times: 10, 10.0, '10', '10:00',
+    '10:00-11:00', '2 PM', '2:30 pm', or a time. 10 means 10:00-11:00.
+    None if it can't be read.
+    """
+    if isinstance(value, (datetime, time)):
+        return value.hour
+    if isinstance(value, (int, float)) and not pd.isna(value):
+        return int(value) if float(value).is_integer() and 0 <= value <= 23 else None
+    match = re.match(r"\s*(\d{1,2})(?::\d{2})?(?::\d{2})?\s*([ap]\.?m\.?)?", str(value), re.I)
+    if not match:
+        return None
+    hour, half = int(match.group(1)), (match.group(2) or "").lower().replace(".", "")
+    if half == "pm" and hour < 12:
+        hour += 12
+    elif half == "am" and hour == 12:
+        hour = 0
+    return hour if 0 <= hour <= 23 else None
+
+
+def _hours(df, table, fallback, check):
+    """Whole-hour slots; rows without hours count as the close of the day."""
     if not _has(df, "hour"):
         return pd.Series(fallback, index=df.index), False
     if df["hour"].isna().any():
-        raise StoreDataError(f"Some rows in the {table} table have an hour and some don't.")
-    hours = _numbers(df, "hour", table)
-    if ((hours % 1 != 0) | (hours > 23)).any():
-        raise StoreDataError(f"The {table} table's hours must be whole hours from 0 to 23.")
-    return hours.astype(int), True
+        check.problem(f"Some rows in the {table} table have an hour and some don't. Fill in every "
+                      f"hour, or remove the Hour column.")
+    hours = df["hour"].map(lambda v: None if pd.isna(v) else _parse_hour(v))
+    unreadable = hours.isna() & df["hour"].notna()
+    if unreadable.any():
+        check.problem(f"The {table} table has hours that can't be read: "
+                      f"{_examples(df.loc[unreadable, 'hour'])}. Use 10, 10:00 or 10 AM.")
+    return hours.fillna(fallback).astype(int), True
 
 
-def _category_ids(df, table, known):
-    ids = _text(df["line"]) + " " + _text(df["product"])
-    unknown = sorted(set(ids) - set(known))
-    if unknown:
-        raise StoreDataError(f"The {table} table has categories with no target: "
-                             f"{', '.join(unknown[:5])}{' ...' if len(unknown) > 5 else ''}.")
+def _category_ids(df, table, lookup, check):
+    """
+    Each row's category id, matched to the Targets sheet regardless of
+    capitals and spacing. Rows for categories with no target are left out
+    (with a warning), since there's nothing to measure them against.
+    """
+    typed = _text(df["line"]) + " " + _text(df["product"])
+    ids = typed.map(lambda name: lookup.get(_normal_name(name)))
+    unknown = typed[ids.isna()]
+    if len(unknown) and ids.notna().any():
+        check.warn(f"The {table} table has categories that aren't in Targets, so they were left out: "
+                   f"{_examples(unknown, 5)}. Add them to Targets to include them.")
+    elif len(unknown):
+        check.problem(f"None of the categories in the {table} table match the Targets sheet (for "
+                      f"example {_examples(unknown, 2)}). Check the line and category names match.")
     return ids
 
 
@@ -380,77 +462,148 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
                 store_id=None, sale_days=(), delivery_weekday=None):
     """
     Builds a Store from any store's tables (columns listed above). Raises
-    StoreDataError with a plain explanation if something can't be used.
+    StoreDataError listing every problem if the data can't be used; things it
+    can work around are listed in the store's `warnings` instead.
 
     The month and "today" come from the sales dates: today is the latest day
     with sales, and the store is read as at the close of that day.
     """
+    check = _Check()
+
     # Structure and targets
-    _require_columns(targets, "targets", ["line", "product", "target"])
+    if not _require_columns(targets, "targets", ["line", "product", "target"], check):
+        check.stop_if_problems()
     targets = targets.dropna(subset=["line", "product"]).copy()
     targets["line"], targets["product"] = _text(targets["line"]), _text(targets["product"])
     targets["category"] = targets["line"] + " " + targets["product"]
-    duplicated = targets.loc[targets["category"].duplicated(), "category"].tolist()
+    targets["key"] = targets["category"].map(_normal_name)
+    duplicated = targets.loc[targets["key"].duplicated(), "category"].tolist()
     if duplicated:
-        raise StoreDataError(f"The targets table lists a category twice: {duplicated[0]}.")
-    targets["target"] = _numbers(targets, "target", "targets")
+        check.problem(f"The targets table lists a category twice: {_examples(duplicated)}.")
+    targets["target"] = _numbers(targets, "target", "targets", check)
     if (targets["target"] <= 0).any():
-        raise StoreDataError("Every target must be more than zero.")
+        check.problem(f"Every target must be more than zero (check "
+                      f"{_examples(targets.loc[targets['target'] <= 0, 'category'])}).")
     department = (_text(targets["department"]) if _has(targets, "department")
                   else pd.Series(WHOLE_STORE, index=targets.index))
     categories = targets["category"].tolist()
+    lookup = dict(zip(targets["key"], categories))
     category_line = dict(zip(categories, targets["line"]))
     category_department = dict(zip(categories, department))
     lines = {}
     for category in categories:
         line, dept = category_line[category], category_department[category]
         if lines.setdefault(line, dept) != dept:
-            raise StoreDataError(f"Line {line} is on more than one floor ({lines[line]} and {dept}).")
+            check.problem(f"Line {line} is on more than one floor ({lines[line]} and {dept}).")
 
     # Sales: fix the month, "today" and the hours
-    _require_columns(sales, "sales", ["date", "line", "product", "units"])
+    if not _require_columns(sales, "sales", ["date", "line", "product", "units"], check):
+        check.stop_if_problems()
     sales = sales.dropna(subset=["date"]).copy()
     if sales.empty:
-        raise StoreDataError("The sales table has no rows.")
-    first = _parse_dates(sales["date"]).min()
-    if pd.isna(first):
-        raise StoreDataError("The sales table's dates can't be read.")
+        check.problem("The sales table has no rows.")
+        check.stop_if_problems()
+    dates = _parse_dates(sales["date"])
+    if dates.isna().all():
+        check.problem(f"The sales table's dates can't be read (for example {_examples(sales['date'], 2)}).")
+        check.stop_if_problems()
+    first = dates.min()
     month_start = date(first.year, first.month, 1)
     days_in_month = calendar.monthrange(first.year, first.month)[1]
 
-    sales["day"] = _days(sales, "sales", month_start, days_in_month)
-    sales["hour"], hourly = _hours(sales, "sales", config.STORE_HOURS[-1])
+    sales["day"] = _days(dates, sales["date"], "sales", month_start, check)
+    sales["hour"], hourly = _hours(sales, "sales", config.STORE_HOURS[-1], check)
+    sales["category"] = _category_ids(sales, "sales", lookup, check)
+    sales["units_sold"] = _numbers(sales, "units", "sales", check, allow_negative=True)
+    sales["value"] = (_numbers(sales, "value", "sales", check, allow_blank=True, allow_negative=True)
+                      .fillna(0) if _has(sales, "value") else 0.0)
+    sales["size"] = _text(sales["size"]) if _has(sales, "size") else NO_SIZE
+    returns = int((sales["units_sold"] < 0).sum())
+    if returns:
+        check.warn(f"{returns} sales row{'s' if returns > 1 else ''} with negative units (returns) "
+                   f"were netted off against sales.")
+    sales = sales[sales["category"].notna()]
+    check.stop_if_problems()
+
+    today_day = int(sales["day"].max())
+    first_day = int(sales["day"].min())
+    if first_day > 1:
+        check.warn(f"Your sales start on day {first_day}, so days 1 to {first_day - 1} count as no "
+                   f"sales and every category will look further behind than it is. If the store "
+                   f"was open then, include sales from the 1st of the month.")
     hours = (list(range(int(sales["hour"].min()), int(sales["hour"].max()) + 1)) if hourly
              else list(config.STORE_HOURS))
-    sales["category"] = _category_ids(sales, "sales", categories)
-    sales["units_sold"] = _numbers(sales, "units", "sales")
-    sales["value"] = _numbers(sales, "value", "sales").fillna(0) if _has(sales, "value") else 0.0
-    sales["size"] = _text(sales["size"]) if _has(sales, "size") else NO_SIZE
-    today_day = int(sales["day"].max())
 
     transactions = None
     if _has(sales, "transactions"):
-        sales["transactions"] = _numbers(sales, "transactions", "sales", allow_blank=True).fillna(0)
+        sales["transactions"] = _numbers(sales, "transactions", "sales", check, allow_blank=True).fillna(0)
         transactions = sales.groupby(["day", "hour", "category"], as_index=False)["transactions"].sum()
 
     keys = ["day", "hour", "category", "size"]
     sales = sales.groupby(keys, as_index=False)[["units_sold", "value"]].sum()
 
     # Stock (optional)
-    if stock is not None:
-        _require_columns(stock, "stock", ["date", "line", "product", "units"])
+    if stock is not None and _require_columns(stock, "stock", ["date", "line", "product", "units"], check):
         stock = stock.dropna(subset=["date"]).copy()
-        stock["day"] = _days(stock, "stock", month_start, days_in_month)
+        stock_dates = _parse_dates(stock["date"])
+        last_sales_date = pd.Timestamp(month_start + timedelta(days=today_day - 1))
+        next_morning = stock_dates.dt.normalize() == last_sales_date + pd.Timedelta(days=1)
+        if next_morning.any() and not _has(stock, "hour"):
+            # A count taken before opening the next day is the previous day's closing stock.
+            stock_dates = stock_dates.where(~next_morning, last_sales_date)
+            check.warn(f"Stock counted on {(last_sales_date + pd.Timedelta(days=1)):%d %b} was used as "
+                       f"the closing stock of {last_sales_date:%d %b}, the last day of sales.")
+        stock["day"] = _days(stock_dates, stock["date"], "stock", month_start, check)
         if (stock["day"] > today_day).any():
-            raise StoreDataError(f"The stock table has counts after the last day of sales (day "
-                                 f"{today_day}). Date the latest count on the last day of sales.")
-        stock["hour"], _ = _hours(stock, "stock", hours[-1])
-        stock["category"] = _category_ids(stock, "stock", categories)
-        stock["units_remaining"] = _numbers(stock, "units", "stock")
+            check.problem(f"The stock table has counts after the last day of sales (day {today_day}). "
+                          f"Date the latest count on the last day of sales.")
+        stock["hour"], _ = _hours(stock, "stock", hours[-1], check)
+        stock["category"] = _category_ids(stock, "stock", lookup, check)
+        stock["units_remaining"] = _numbers(stock, "units", "stock", check, allow_negative=True)
+        if (stock["units_remaining"] < 0).any():
+            check.warn("Some stock counts were negative (usually unrecorded deliveries), so they were "
+                       "treated as zero.")
+            stock["units_remaining"] = stock["units_remaining"].clip(lower=0)
         stock["size"] = _text(stock["size"]) if _has(stock, "size") else NO_SIZE
         if (stock["size"] == NO_SIZE).all() != (sales["size"] == NO_SIZE).all():
-            raise StoreDataError("Sales and stock must both have sizes, or both leave them out.")
+            check.problem("Sales and stock must both have sizes, or both leave them out.")
+        stock = stock[stock["category"].notna()]
         stock = stock.groupby(keys, as_index=False)["units_remaining"].sum()
+    elif stock is not None:
+        stock = None
+
+    # Visitor counts (optional)
+    if footfall is not None and _require_columns(footfall, "footfall", ["date", "visitors"], check):
+        footfall = footfall.dropna(subset=["date"]).copy()
+        footfall["day"] = _days(_parse_dates(footfall["date"]), footfall["date"], "footfall",
+                                month_start, check)
+        footfall["hour"], _ = _hours(footfall, "footfall", hours[-1], check)
+        floors = {_normal_name(f): f for f in lines.values()}
+        typed = (_text(footfall["department"]) if _has(footfall, "department")
+                 else pd.Series(WHOLE_STORE, index=footfall.index))
+        footfall["zone"] = typed.map(lambda f: floors.get(_normal_name(f)))
+        if footfall["zone"].isna().any():
+            check.problem(f"The visitors table has floors that no line is on: "
+                          f"{_examples(typed[footfall['zone'].isna()])}. Use the floor names from "
+                          f"Targets ({', '.join(dict.fromkeys(lines.values()))}).")
+        footfall["visitors"] = _numbers(footfall, "visitors", "footfall", check)
+        footfall = footfall.groupby(["day", "hour", "zone"], as_index=False)["visitors"].sum()
+    elif footfall is not None:
+        footfall = None
+
+    # Loyalty tiers (optional)
+    loyalty_columns = ["tier", "line", "product", "share_of_transactions", "avg_basket_value", "avg_upt",
+                       "cross_sell_response_rate", "preferred_offer_type"]
+    if loyalty is not None and _require_columns(loyalty, "loyalty", loyalty_columns, check):
+        loyalty = loyalty.dropna(subset=["tier"]).copy()
+        loyalty["category"] = _category_ids(loyalty, "loyalty", lookup, check)
+        for column in ("share_of_transactions", "avg_basket_value", "avg_upt", "cross_sell_response_rate"):
+            loyalty[column] = _numbers(loyalty, column, "loyalty", check)
+        loyalty = loyalty[loyalty["category"].notna()]
+    elif loyalty is not None:
+        loyalty = None
+
+    check.stop_if_problems()
 
     # Sizes, in display order, and the core sizes most shoppers need
     sizes, core_sizes = {}, {}
@@ -473,31 +626,7 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
             core = _core_by_sales({s: units.get(s, 0) for s in sizes[category]})
             core_sizes[category] = [s for s in sizes[category] if s in core]
 
-    # Visitor counts (optional)
-    if footfall is not None:
-        _require_columns(footfall, "footfall", ["date", "visitors"])
-        footfall = footfall.dropna(subset=["date"]).copy()
-        footfall["day"] = _days(footfall, "footfall", month_start, days_in_month)
-        footfall["hour"], _ = _hours(footfall, "footfall", hours[-1])
-        footfall["zone"] = (_text(footfall["department"]) if _has(footfall, "department")
-                            else WHOLE_STORE)
-        unknown = sorted(set(footfall["zone"]) - set(lines.values()))
-        if unknown:
-            raise StoreDataError(f"The footfall table has floors that no line is on: {', '.join(unknown)}.")
-        footfall["visitors"] = _numbers(footfall, "visitors", "footfall")
-        footfall = footfall.groupby(["day", "hour", "zone"], as_index=False)["visitors"].sum()
-
-    # Loyalty tiers (optional)
-    if loyalty is not None:
-        _require_columns(loyalty, "loyalty", ["tier", "line", "product", "share_of_transactions",
-                                              "avg_basket_value", "avg_upt",
-                                              "cross_sell_response_rate", "preferred_offer_type"])
-        loyalty = loyalty.dropna(subset=["tier"]).copy()
-        loyalty["category"] = _category_ids(loyalty, "loyalty", categories)
-        for column in ("share_of_transactions", "avg_basket_value", "avg_upt", "cross_sell_response_rate"):
-            loyalty[column] = _numbers(loyalty, column, "loyalty")
-
-    # Add each row's line and floor, as the demo data has them.
+    # Add each row's line and floor, as the Sample Store's data has them.
     for df in (sales, stock):
         if df is not None:
             df["line"] = df["category"].map(category_line)
@@ -519,7 +648,7 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
         category_department=category_department,
         lines=lines,
         targets=dict(zip(categories, targets["target"].astype(int))),
-        last_year=(dict(zip(categories, _numbers(targets, "last_year", "targets", allow_blank=True)))
+        last_year=(dict(zip(categories, _numbers(targets, "last_year", "targets", check, allow_blank=True)))
                    if _has(targets, "last_year") else {}),
         sizes=sizes,
         core_sizes=core_sizes,
@@ -531,6 +660,7 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
         stock=stock,
         footfall=footfall,
         loyalty=loyalty,
+        warnings=check.warnings,
     )
 
 
