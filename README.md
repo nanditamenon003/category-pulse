@@ -8,6 +8,10 @@
 
 ### Finding your way around the site
 
+**First visit.** The welcome page offers **Log in**, **Create account** (through Auth0, which also offers "Continue with Google"), or **Look around without an account**.
+- **Signed in:** a short three-step welcome guide opens, ending with **Take the 2-minute tour** (a walkthrough with sample data) or **Skip** (straight to Your data). Until your data is uploaded, each page says what will appear there.
+- **Guests:** they explore the Sample Store, a made-up store with a few problems hidden in it.
+
 | Section | What it's for |
 |---|---|
 | **Today** | The home screen: four headline numbers, what needs action now and why, and a "Start here" guide for first-time visitors |
@@ -16,14 +20,15 @@
 | **Floor and staff** | Visitors and buyers per floor zone, and tomorrow's peak hours and floor split |
 | **Sell** | Cross-sell scripts for the till, and what each loyalty tier responds to |
 | **Summary** | The end-of-day summary and the month's contribution report, both downloadable |
-| **Your data** | Download the Excel template (or a filled-in sample), upload your own store's month, check what it switches on, and show every page on your numbers |
+| **Your data** | Three steps: download the Excel template, fill it in and upload it, then check what it switches on before every page shows your numbers |
 | **Guide** | What each status and term means in plain English, how the AI chat works, and a button to start the tour |
 
-- **Guided tour:** "Take the tour" (on Today or the Guide) walks through the site in seven stops. It moves between pages by itself and outlines what to look at on each one.
+- **Guided tour:** "Take the 2-minute tour" walks through the site in seven stops on the Sample Store. It moves between pages by itself and outlines what to look at on each one.
 
 - **Category detail:** tap any category for a pop-up with four tabs: *Why*, *Stock by size*, *Shoppers* and *Sell*.
-- **Chat:** the **Ask Category Pulse** button (bottom right, on every page) opens the AI chat.
-- **Time:** the time button (top right) rewinds the simulated day, and every page follows it.
+- **Chat:** on the Sample Store, the **Ask Category Pulse** button (bottom right) opens the AI chat.
+- **Time:** the time button (top right) steps through the day, and every page follows it.
+- **Account:** the account button (top right) shows who is signed in, with **Log out**.
 
 ---
 
@@ -93,7 +98,24 @@ pip install -r requirements.txt
 streamlit run src/app.py
 ```
 
-The dashboard builds its simulated data on first start (or run `python src/generate_data.py` yourself). Everything except the AI chat works with no API key.
+The app builds the Sample Store's data on first start (or run `python src/generate_data.py` yourself). Everything except the AI chat and sign-in works with no keys; without sign-in settings, the welcome page simply offers "Look around without an account".
+
+**For sign-in**, create a free [Auth0](https://auth0.com) "Regular Web Application":
+- Allowed Callback URLs and Allowed Logout URLs: `http://localhost:8501/oauth2callback` (plus your live app's address + `/oauth2callback`).
+- In `.streamlit/secrets.toml` (never committed), add:
+
+```toml
+[auth]
+redirect_uri = "http://localhost:8501/oauth2callback"
+cookie_secret = "a long random string"
+
+[auth.auth0]
+client_id = "..."
+client_secret = "..."
+server_metadata_url = "https://YOUR-AUTH0-DOMAIN/.well-known/openid-configuration"
+```
+
+Auth0 handles creating accounts, passwords, "Continue with Google" and password resets; the app only receives the person's name and email.
 
 **For the AI chat**, copy `.env.example` to `.env` and add a key for the provider set in `src/config.py` (`AI_PROVIDER`):
 
@@ -109,7 +131,7 @@ Each module can also be run on its own and prints its own checks, e.g. `python s
 ### Deploying (Streamlit Community Cloud, free)
 
 1. Sign in at [share.streamlit.io](https://share.streamlit.io) with GitHub and create an app from this repository, with the main file `src/app.py` and Python 3.11.
-2. Under **Advanced settings → Secrets**, add `DEEPSEEK_API_KEY = "your-key"`.
+2. Under **Advanced settings → Secrets**, add `DEEPSEEK_API_KEY = "your-key"` and, below it, the `[auth]` settings above, with `redirect_uri` set to the live address + `/oauth2callback`.
 3. Deploy. The app limits each visitor to a few chat questions (`DEMO_QUESTION_LIMIT` in `src/config.py`), so one visitor can't use up the API credit.
 
 ## Project structure
@@ -128,8 +150,9 @@ category-pulse/
 │   ├── diagnosis.py      "why is it behind?": one likely cause, the evidence, one action
 │   ├── digest.py         the plain-English end-of-day summary
 │   ├── agent.py          the AI chat: tools, instructions, and the tool-calling loop
-│   ├── app.py            the web app's frame: top menu, time button, chat button
-│   ├── views.py          the pages and the pop-ups (category detail, chat)
+│   ├── app.py            the web app's frame: top menu, time and account buttons, chat button
+│   ├── account.py        the welcome page, sign-in with Auth0, log out, and guest mode
+│   ├── views.py          the pages and the pop-ups (welcome guide, category detail, chat)
 │   ├── tour.py           the guided tour
 │   └── ui.py             shared styling, building blocks and cached data lookups
 ├── tests/

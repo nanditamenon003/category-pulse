@@ -182,6 +182,20 @@ header[data-testid="stHeader"] {{ background: {PAGE}; border-bottom: 1px solid {
 .cp-feature-text {{ font-size: 14px; color: {TEXT}; line-height: 1.5; }}
 .st-key-welcome_actions {{ margin-bottom: 4px; }}
 
+/* Welcome guide, empty pages and numbered steps */
+.cp-welcome-title {{ font-size: 20px; font-weight: 700; color: {TEXT}; margin: 6px 0 6px; }}
+.cp-dots {{ display: flex; gap: 6px; margin: 14px 0 6px; }}
+.cp-dot {{ width: 7px; height: 7px; border-radius: 4px; background: {BORDER}; }}
+.cp-dot.on {{ width: 20px; background: {ACCENT}; }}
+.cp-empty {{ background: {CARD}; border: 1px dashed {NEUTRAL}; border-radius: 8px; padding: 32px 22px;
+            text-align: center; margin: 8px 0 14px; }}
+.cp-empty-title {{ font-size: 18px; font-weight: 700; color: {TEXT}; margin-bottom: 6px; }}
+.cp-empty-text {{ font-size: 14px; color: {MUTED}; max-width: 520px; margin: 0 auto; line-height: 1.55; }}
+.cp-stepline {{ display: flex; align-items: center; gap: 10px; font-size: 16px; font-weight: 700;
+               color: {TEXT}; margin: 26px 0 8px; }}
+.cp-stepnum {{ width: 26px; height: 26px; border-radius: 13px; background: {TEXT}; color: #FFFFFF;
+              font-size: 13px; display: inline-flex; align-items: center; justify-content: center; }}
+
 /* Guide page */
 .cp-term {{ font-size: 14px; color: {TEXT}; margin: 6px 0; line-height: 1.55; }}
 .cp-term b {{ font-weight: 700; }}
@@ -231,20 +245,22 @@ def load_data():
 
 
 def current_store():
-    """The store every page shows: the demo, or the visitor's own uploaded data."""
-    if st.session_state.get("use_my_store") and st.session_state.get("my_store") is not None:
-        return st.session_state["my_store"]
+    """
+    The store the pages show, or None:
+      - during the guided tour, the Sample Store (the tour is written for it)
+      - for someone signed in, their own uploaded data, or None until they upload
+      - for guests, the Sample Store
+    """
+    if st.session_state.get("tour_step") is not None:
+        return load_data()
+    if st.session_state.get("member"):
+        return st.session_state.get("my_store")
     return load_data()
 
 
-# Saved choices that only make sense for one store, cleared when switching.
+# Saved choices that only make sense for one store, cleared when the store in use changes.
 _STORE_SPECIFIC_KEYS = ("hour", "cat_department", "sell_category", "chat_chip")
 _UPLOAD_KEYS = ("my_store", "upload_result", "upload_key", "upload_files")
-
-
-def request_store(mine):
-    """Switch between the demo (False) and the visitor's own store (True) on the next run."""
-    st.session_state["switch_to_mine"] = mine
 
 
 def request_forget():
@@ -252,29 +268,27 @@ def request_forget():
     st.session_state["forget_mine"] = True
 
 
-def apply_store_switch():
+def prepare_session():
     """
-    Carries out a requested switch. Runs at the very top of app.py, before
-    any widget exists, because Streamlit only lets a widget's saved value be
-    cleared before the widget is drawn.
+    Runs at the very top of app.py, before any widget is drawn (Streamlit only
+    lets a widget's saved value be cleared before the widget exists): removes
+    uploaded data if asked, and clears choices that belonged to a different
+    store than the one about to be shown. Returns that store (or None).
     """
     if st.session_state.pop("forget_mine", False):
         for key in _UPLOAD_KEYS:
             st.session_state.pop(key, None)
-        # Worked-out results for the uploaded data go too (the demo's rebuild on demand).
+        # Worked-out results for the uploaded data go too (the Sample Store's rebuild on demand).
         _lookup.clear()
         _slow_lookup.clear()
-        st.session_state["switch_to_mine"] = False
-    if "switch_to_mine" not in st.session_state:
-        return
-    mine = st.session_state.pop("switch_to_mine")
-    st.session_state["use_my_store"] = bool(mine) and st.session_state.get("my_store") is not None
-    if st.session_state["use_my_store"]:
-        st.session_state.pop("tour_step", None)  # the tour is written for the demo store
-    for key in list(st.session_state):
-        if key in _STORE_SPECIFIC_KEYS or str(key).startswith(("category_table_", "last_pick_")):
-            del st.session_state[key]
-
+    store = current_store()
+    store_id = store.id if store is not None else None
+    if st.session_state.get("store_in_use", store_id) != store_id:
+        for key in list(st.session_state):
+            if key in _STORE_SPECIFIC_KEYS or str(key).startswith(("category_table_", "last_pick_")):
+                del st.session_state[key]
+    st.session_state["store_in_use"] = store_id
+    return store
 
 def current_hour():
     """The hour slot the whole app is looking at (10 = 10:00-11:00 ... 19 = 19:00-20:00)."""

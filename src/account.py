@@ -57,10 +57,10 @@ def is_guest():
 
 
 def first_name():
-    """What to call the person: their first name if Auth0 knows it, otherwise their email."""
+    """The person's first name if Auth0 knows it (e.g. from Google), otherwise None."""
     user = st.user
-    name = user.get("given_name") or user.get("name") or user.get("email") or "there"
-    return name if "@" in name else name.split()[0]
+    name = str(user.get("given_name") or user.get("name") or "").strip()
+    return name.split()[0] if name and "@" not in name else None
 
 
 def sign_in():
@@ -104,7 +104,7 @@ def account_menu():
     """The account button in the top bar: who's signed in, and Log out (or, for guests, sign in)."""
     if is_signed_in():
         email = st.user.get("email") or ""
-        with st.popover(first_name(), icon=":material/account_circle:"):
+        with st.popover(first_name() or "Account", icon=":material/account_circle:"):
             if email:
                 html_block(f'<div class="cp-small">Signed in as {esc(email)}</div>')
             if st.button("Log out", key="account_logout", icon=":material/logout:"):

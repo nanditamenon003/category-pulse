@@ -8,7 +8,7 @@ Next / End tour; Next moves to the right page by itself.
 
 import streamlit as st
 
-from ui import ACCENT, current_store, esc, html_block, request_store
+from ui import ACCENT, esc, html_block
 
 TOUR = [
     {
@@ -76,8 +76,10 @@ PAGES = {}
 
 
 def start():
-    """Start the tour from the first stop, on the Sample Store (the tour is written for it)."""
-    request_store(False)
+    """
+    Start the tour from the first stop. While it runs, the pages show the
+    Sample Store (the tour is written for it); see ui.current_store().
+    """
     st.session_state["tour_step"] = 0
     st.switch_page(PAGES[TOUR[0]["page"]])
 
@@ -85,6 +87,9 @@ def start():
 def _go(step):
     if step is None or step >= len(TOUR):
         st.session_state["tour_step"] = None
+        # Someone signed in with no data yet goes on to upload their own.
+        if st.session_state.get("member") and st.session_state.get("my_store") is None:
+            st.switch_page(PAGES["Your data"])
         st.rerun()
     st.session_state["tour_step"] = step
     st.switch_page(PAGES[TOUR[step]["page"]])
@@ -93,7 +98,7 @@ def _go(step):
 def render(current_page_title):
     """Draw the tour card (or a 'return to the tour' bar) at the top of the page."""
     step = st.session_state.get("tour_step")
-    if step is None or not current_store().is_demo:
+    if step is None:
         return
     stop = TOUR[step]
 
@@ -113,7 +118,7 @@ def render(current_page_title):
                f"outline-offset: 4px; }}</style>")
     with st.container(key="tour_card"):
         html_block(f'<div class="cp-tour"><div class="cp-tour-step">Tour · step {step + 1} of '
-                   f'{len(TOUR)}</div><div class="cp-tour-title">{esc(stop["title"])}</div>'
+                   f'{len(TOUR)} · with sample data</div><div class="cp-tour-title">{esc(stop["title"])}</div>'
                    f'<div class="cp-tour-text">{esc(stop["text"])}</div></div>')
         last = step == len(TOUR) - 1
         with st.container(horizontal=True, gap="small"):

@@ -8,14 +8,18 @@ Layers:
      an account, or look around as a guest.
   1. The frame (this file): name, which store's data is showing, time button,
      account menu, top menu, the guided tour card, and a floating "Ask
-     Category Pulse" button on every page.
+     Category Pulse" button.
   2. Pages (views.py): Today, Categories, Stock, Floor and staff, Sell,
      Summary, Your data, Guide.
-  3. Pop-ups on top of a page: category details and the chat.
+  3. Pop-ups on top of a page: the welcome guide, category details and the chat.
 
-The chat and the tour belong to the Sample Store. With a visitor's own
-uploaded data they're switched off: uploaded figures are never sent to an
-AI provider.
+What the pages show:
+  - signed in: the person's own uploaded data. Until they upload, each page
+    explains what will appear there. A short welcome guide opens once per
+    visit and ends with "Take the 2-minute tour" or "Skip".
+  - the tour, and guests: the Sample Store, a made-up store for learning.
+The AI chat works on the Sample Store only: uploaded figures are never sent
+to an AI provider.
 """
 
 import streamlit as st
@@ -23,17 +27,7 @@ import streamlit as st
 import account
 import tour
 import views
-from ui import (
-    CSS,
-    apply_store_switch,
-    current_hour,
-    current_store,
-    esc,
-    html_block,
-    request_store,
-    time_label,
-    today_label,
-)
+from ui import CSS, current_hour, esc, html_block, prepare_session, time_label, today_label
 
 st.set_page_config(page_title="Category Pulse", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(CSS, unsafe_allow_html=True)
@@ -45,8 +39,8 @@ if not signed_in and not account.is_guest():
                   position="hidden").run()
     st.stop()
 
-apply_store_switch()  # before any widget is drawn
-store = current_store()  # builds the Sample Store's data on a fresh deployment, once
+st.session_state["member"] = signed_in
+store = prepare_session()  # before any widget is drawn
 
 PAGES = {
     "Today": st.Page(views.today_page, title="Today", icon=":material/today:", default=True),
@@ -65,43 +59,32 @@ PAGES = {
 tour.PAGES = PAGES
 current_page = st.navigation(list(PAGES.values()), position="top")
 
-# Uploaded data isn't kept between visits, so each visit starts on Your data:
-# upload the store's figures, or explore the Sample Store.
-if signed_in and not st.session_state.get("visit_started"):
-    st.session_state["visit_started"] = True
-    if st.session_state.get("my_store") is None and current_page.title != "Your data":
-        st.switch_page(PAGES["Your data"])
-
-
-def _on_store_choice():
-    choice = st.session_state.get(f"store_choice_{int(not store.is_demo)}")
-    if choice is not None:
-        request_store(choice == "Your store")
-
-
-# --- Frame: name, which data is showing, and the time -----------------------------------
-hour = current_hour()
+# --- Frame: name, which data is showing, the time and the account -------------------------
 with st.container(horizontal=True, horizontal_alignment="distribute", vertical_alignment="center"):
-    label = esc(store.name) + ("" if store.is_demo else " · uploaded data")
-    html_block(f'<span class="cp-brand">Category Pulse</span><span class="cp-datalabel">{label}</span>')
+    if store is None:
+        label = "No data yet"
+    elif store.is_demo:
+        label = store.name + (" · walkthrough" if signed_in else "")
+    else:
+        label = store.name + " · uploaded data"
+    html_block(f'<span class="cp-brand">Category Pulse</span><span class="cp-datalabel">{esc(label)}</span>')
     with st.container(horizontal=True, gap="small", vertical_alignment="center", width="content"):
-        if st.session_state.get("my_store") is not None:
-            # A fresh key whenever the store changes, so the control always shows the store in use.
-            st.segmented_control(
-                "Data", ["Sample Store", "Your store"], default="Sample Store" if store.is_demo else "Your store",
-                key=f"store_choice_{int(not store.is_demo)}", on_change=_on_store_choice,
-                label_visibility="collapsed",
-            )
-        if store.hourly:
+        if store is not None and store.hourly:
+            hour = current_hour()
             with st.popover(f"{today_label()}, {time_label(hour)}", icon=":material/schedule:"):
                 st.select_slider(
                     "Step through the day", options=store.hours, key="hour",
                     format_func=time_label,
                     help="Everything on the site shows the store as it was at this time.",
                 )
-        else:
+        elif store is not None:
             html_block(f'<span class="cp-datalabel">Close of {esc(today_label())}</span>')
         account.account_menu()
+
+# --- The welcome guide: once per visit, for someone signed in with no data yet ---------------
+if signed_in and store is None and not st.session_state.get("welcomed"):
+    st.session_state["welcomed"] = True
+    views.welcome_guide()
 
 tour.render(current_page.title)
 current_page.run()
@@ -109,7 +92,7 @@ current_page.run()
 # --- Floating chat button, Sample Store only -------------------------------------------------
 # The chat also opens when a category pop-up hands over a question ("Ask the AI
 # about this category"): only one pop-up can be open at a time.
-if store.is_demo:
+if store is not None and store.is_demo:
     clicked = st.button("Ask Category Pulse", key="chat_fab", icon=":material/forum:", type="primary")
     if clicked or st.session_state.pop("open_chat", False):
         views.chat_dialog()

@@ -54,7 +54,6 @@ from ui import (
     playbook_for,
     progress_bar,
     request_forget,
-    request_store,
     risky_sizes_at,
     slug,
     staffing_for,
@@ -88,15 +87,77 @@ def _not_in_data(what, add):
                f'{esc(add)} (the Your data page has the template).</p></div>')
 
 
+# --- Welcome guide and empty pages ---------------------------------------------------------
+
+WELCOME_STEPS = [
+    ("Bring in your numbers",
+     "Fill in the Excel template with your monthly targets and your sales. Stock and visitor counts "
+     "are optional, and each one adds more."),
+    ("See what needs action",
+     "Every category gets a status against its monthly target, and the ones genuinely behind come "
+     "first, so you know where to look."),
+    ("Know why, and what to do",
+     "Tap any category for the likely cause (sold out, missing sizes, fewer visitors or fewer "
+     "buyers) and one clear next step."),
+]
+
+
+def _set_welcome_step(step):
+    st.session_state["welcome_step"] = step
+
+
+@st.dialog("Welcome to Category Pulse")
+def welcome_guide():
+    """A three-step introduction for someone signed in without data, once per visit."""
+    step = st.session_state.setdefault("welcome_step", 0)
+    title, text = WELCOME_STEPS[step]
+    dots = "".join(f'<span class="cp-dot{" on" if i == step else ""}"></span>'
+                   for i in range(len(WELCOME_STEPS)))
+    html_block(f'<div class="cp-small">Step {step + 1} of {len(WELCOME_STEPS)}</div>'
+               f'<div class="cp-welcome-title">{esc(title)}</div>'
+               f'<div class="cp-tour-text">{esc(text)}</div><div class="cp-dots">{dots}</div>')
+    last = step == len(WELCOME_STEPS) - 1
+    with st.container(horizontal=True, gap="small", vertical_alignment="center"):
+        if step > 0:
+            st.button("Back", key="welcome_back", on_click=_set_welcome_step, args=[step - 1])
+        if last:
+            if st.button("Take the 2-minute tour", key="welcome_tour", type="primary",
+                         icon=":material/tour:"):
+                tour.start()
+        else:
+            st.button("Next", key="welcome_next", type="primary", on_click=_set_welcome_step,
+                      args=[step + 1])
+        if st.button("Skip", key="welcome_skip", type="tertiary"):
+            st.switch_page(tour.PAGES["Your data"])
+
+
+def _no_data(page, what, detail):
+    """
+    For someone signed in who hasn't uploaded yet: the page says what will
+    appear here, with the two ways forward. Returns True if it drew that.
+    """
+    if current_store() is not None:
+        return False
+    page_title(page)
+    html_block(f'<div class="cp-empty"><div class="cp-empty-title">{esc(what)}</div>'
+               f'<div class="cp-empty-text">{esc(detail)}</div></div>')
+    with st.container(horizontal=True, gap="small", horizontal_alignment="center"):
+        if st.button("Upload your data", key="empty_upload", type="primary",
+                     icon=":material/upload_file:"):
+            st.switch_page(tour.PAGES["Your data"])
+        if st.button("Take the 2-minute tour", key="empty_tour", icon=":material/tour:"):
+            tour.start()
+    return True
+
+
 # --- Today ---------------------------------------------------------------------------------
 
 def _your_store_note(s):
     html_block(
         '<div class="cp-panel"><div class="cp-panel-title">Your store</div>'
         f'<p>Showing your uploaded data for {esc(s.month_name)} {s.month_start.year}, as at the '
-        f'close of day {s.today_day}. It\'s read for this session only and isn\'t saved. To keep it '
-        'private, the AI chat and the tour aren\'t used with your own data. Switch stores at the top '
-        'of the page.</p>'
+        f'close of day {s.today_day}. It\'s read for this visit only and isn\'t saved, and to keep it '
+        'private the AI chat isn\'t used with it. To replace or remove it, go to Your data.</p>'
         + "".join(f'<p class="cp-small">Note: {esc(w)}</p>' for w in s.warnings)
         + '</div>'
     )
@@ -162,6 +223,10 @@ def _compact_row(tone, title, text):
 
 
 def today_page():
+    if _no_data("Today", "Your store at a glance will show here",
+                "How the month is going against target, which categories need action and why, and "
+                "how today is going. Upload your targets and sales to start."):
+        return
     hour = current_hour()
     s = current_store()
     page_title("Today", f"The store at {time_label(hour)} on day {s.today_day} of the month.")
@@ -513,6 +578,9 @@ def _category_table(shown, filters_key):
 
 
 def categories_page():
+    if _no_data("Categories", "Every category will show here",
+                "Each category's month-to-date pace against its target, as cards, a table or a chart."):
+        return
     hour = current_hour()
     page_title("Categories", "Every category's month-to-date pace. Tap a card or a row for the "
                              "full picture.")
@@ -577,6 +645,10 @@ def _stock_problem_text(r):
 
 
 def stock_page():
+    if _no_data("Stock", "Stock problems will show here",
+                "Sold-out sizes, broken size runs, last pieces and sizes likely to run out. Include "
+                "stock counts when you upload your sales."):
+        return
     hour = current_hour()
     page_title("Stock", "What's on the shelf, what's missing, and what's about to run out.")
     s = current_store()
@@ -676,6 +748,10 @@ def _hour_chart(pattern):
 
 
 def floor_page():
+    if _no_data("Floor and staff", "Visitors, buyers and tomorrow's rota will show here",
+                "Whether fewer people are coming in or fewer are buying, and where to put the team "
+                "tomorrow. Include visitor counts when you upload."):
+        return
     hour = current_hour()
     page_title("Floor and staff", "Who's coming in, how many are buying, and where to put the team "
                                   "tomorrow.")
@@ -758,6 +834,10 @@ def _tomorrow(s):
 # --- Sell page --------------------------------------------------------------------------------------
 
 def sell_page():
+    if _no_data("Sell", "What to say at the till will show here",
+                "Cross-sell ideas for categories that are behind, aimed at the loyalty tier most "
+                "likely to respond."):
+        return
     hour = current_hour()
     page_title("Sell", "Cross-sell ideas for categories behind pace, and what each loyalty tier "
                        "responds to.")
@@ -801,6 +881,10 @@ def sell_page():
 
 
 def summary_page():
+    if _no_data("Summary", "Your end-of-day summary will show here",
+                "A short plain-English summary of the day, and the month's contribution report, "
+                "both downloadable."):
+        return
     hour = current_hour()
     s = current_store()
     is_close = hour == s.hours[-1]
@@ -885,7 +969,7 @@ def _feature_row(name, on, hint):
 
 
 def _upload_preview(store, notes):
-    html_block(heading("3. Check it", "before switching every page to it"))
+    html_block(_step_heading(3, "Check it", "before every page switches to it"))
     lines, floors = len(store.lines), len(store.departments)
     html_block('<div class="cp-kpis">'
                + kpi_card("Month", f"{store.month_name} {store.month_start.year}",
@@ -924,70 +1008,62 @@ def _upload_preview(store, notes):
         html_block('<div class="cp-small" style="margin-top:8px">This is the store loaded above.</div>')
     elif st.button("Show my store", key="show_upload", type="primary", icon=":material/arrow_forward:"):
         st.session_state["my_store"] = store
-        request_store(True)
+        st.session_state["tour_step"] = None
         st.switch_page(tour.PAGES["Today"])
+
+
+def _step_heading(number, text, sub=""):
+    sub_html = f' <span class="cp-sub">{esc(sub)}</span>' if sub else ""
+    return (f'<div class="cp-stepline"><span class="cp-stepnum">{number}</span>'
+            f'{esc(text)}{sub_html}</div>')
 
 
 def your_data_page():
-    page_title("Your data", "See your own store in Category Pulse: fill in the Excel template, upload "
-                            "it, and every page switches to your numbers.")
+    guest = account.is_guest()
     mine = st.session_state.get("my_store")
-    greeting = (f"Welcome, {esc(account.first_name())}. " if account.is_signed_in() and mine is None
-                else "")
-    html_block(f'<div class="cp-panel"><p>{greeting}Until you upload your own data, the pages show '
-               'the <b>Sample Store</b>: a made-up store with realistic numbers and a few problems '
-               'hidden in them, so you can see what Category Pulse does.</p>'
-               '<p><b>Before you upload:</b> only use real company figures with your manager\'s '
-               'approval. Your file is read for this session only and isn\'t saved, and the AI chat '
-               'isn\'t used with uploaded data.</p></div>')
-    if mine is None and st.button("Explore the Sample Store", key="explore_sample",
-                                  icon=":material/storefront:"):
-        request_store(False)
-        st.switch_page(tour.PAGES["Today"])
-    if mine is not None:
-        showing = not current_store().is_demo
-        html_block(heading("Your store")
-                   + f'<div class="cp-panel"><p><b>{esc(mine.name)}</b>: {esc(mine.month_name)} '
-                     f'{mine.month_start.year}, up to day {mine.today_day}. '
-                   + ("Every page is showing it now." if showing
-                      else "Loaded, but the pages are showing the Sample Store.")
-                   + "</p></div>")
-        with st.container(horizontal=True, gap="small", vertical_alignment="center"):
-            if showing:
-                if st.button("Back to the Sample Store", key="mine_to_demo"):
-                    request_store(False)
-                    st.rerun()
-            elif st.button("Show my store", key="mine_show", type="primary"):
-                request_store(True)
-                st.switch_page(tour.PAGES["Today"])
-            if st.button("Remove my data", key="mine_forget", type="tertiary"):
-                request_forget()
-                st.rerun()
+    page_title("Your data", "Bring in your store's month in three steps: download the template, fill "
+                            "it in, and upload it.")
 
-    html_block(heading("1. Get the template")
-               + '<div class="cp-panel"><p>One Excel file with a sheet for each kind of data. '
-                 '<b>Targets</b> and <b>Sales</b> are required. <b>Stock</b>, <b>Visitors</b>, '
-                 '<b>Loyalty</b> and <b>Settings</b> are optional, and each one switches on more of '
-                 'the app. The Read me sheet explains every column. The sample file is the Sample '
-                 'Store\'s month, filled in, so you can see exactly what goes where.</p></div>')
-    with st.container(horizontal=True, gap="small", wrap=True):
-        st.download_button("Download the template", data=upload.template_bytes(), mime=XLSX,
-                           file_name="category-pulse-template.xlsx", icon=":material/download:")
-        with st.spinner("Preparing the sample..."):
-            sample = upload.sample_bytes()
-        st.download_button("Download the sample file", data=sample, mime=XLSX,
-                           file_name="category-pulse-sample-store.xlsx", icon=":material/download:")
-
-    if account.is_guest():
-        html_block(heading("2. Upload it")
-                   + '<div class="cp-panel"><p>Create a free account to upload your own store\'s '
-                     'data. It only takes a minute.</p></div>')
+    if guest:
+        html_block('<div class="cp-panel"><p>You\'re looking around the <b>Sample Store</b>: a made-up '
+                   'store with realistic numbers and a few problems hidden in them, so you can see '
+                   'what Category Pulse does. Create a free account to bring in your own store\'s '
+                   'data.</p></div>')
         if account.is_configured():
             st.button("Log in or create account", key="guest_signup", type="primary",
                       on_click=account.sign_in)
+    elif mine is not None:
+        html_block(heading("Your store")
+                   + f'<div class="cp-panel"><p><b>{esc(mine.name)}</b>: {esc(mine.month_name)} '
+                     f'{mine.month_start.year}, up to day {mine.today_day}. Every page is showing it. '
+                     'To replace it, upload a new file below.</p></div>')
+        if st.button("Remove my data", key="mine_forget", type="tertiary"):
+            request_forget()
+            st.rerun()
+    else:
+        name = account.first_name()
+        html_block(f'<div class="cp-panel"><p><b>Welcome{", " + esc(name) if name else ""}.</b> Three steps '
+                   'and every page fills in with your store\'s numbers.</p>'
+                   '<p class="cp-small">Only use real company figures with your manager\'s approval. '
+                   'Your file is read for this visit only and isn\'t saved, and the AI chat isn\'t '
+                   'used with it.</p></div>')
+        if st.button("Take the 2-minute tour first", key="data_tour", icon=":material/tour:",
+                     type="tertiary"):
+            tour.start()
+
+    html_block(_step_heading(1, "Download the template")
+               + '<div class="cp-small" style="margin:0 0 8px">One Excel file with a sheet for each kind '
+                 'of data. <b>Targets</b> and <b>Sales</b> are required; <b>Stock</b>, <b>Visitors</b>, '
+                 '<b>Loyalty</b> and <b>Settings</b> are optional, and each one switches on more of the '
+                 'app. The Read me sheet explains every column.</div>')
+    st.download_button("Download the template", data=upload.template_bytes(), mime=XLSX,
+                       file_name="category-pulse-template.xlsx", icon=":material/download:")
+
+    if guest:
         return
 
-    html_block(heading("2. Upload it", "the filled-in template, or one CSV file per sheet, e.g. sales.csv"))
+    html_block(_step_heading(2, "Fill it in and upload it",
+                             "the Excel file, or one CSV file per sheet, e.g. sales.csv"))
     files = st.file_uploader("Upload your data", type=["xlsx", "csv"], accept_multiple_files=True,
                              key="upload_files", label_visibility="collapsed")
     if files:
@@ -997,10 +1073,6 @@ def your_data_page():
             st.session_state["upload_key"] = fingerprint
             with st.spinner("Reading your file..."):
                 _read_upload(data)
-    if st.button("Or try it with the sample file", key="try_sample", icon=":material/science:",
-                 type="tertiary"):
-        with st.spinner("Reading the sample..."):
-            _read_upload([("category-pulse-sample-store.xlsx", sample)])
 
     result = st.session_state.get("upload_result")
     if result is None:
@@ -1015,7 +1087,6 @@ def your_data_page():
                    + '<div class="cp-small">Fix them in the file and upload it again.</div>')
         return
     _upload_preview(result["store"], result["notes"])
-
 
 # --- Guide page ------------------------------------------------------------------------------
 
@@ -1055,7 +1126,6 @@ GUIDE_TERMS = [
 
 
 def guide_page():
-    s = current_store()
     page_title("Guide", "How to read Category Pulse, in plain English.")
     if st.button("Start the guided tour", key="guide_tour", icon=":material/tour:"):
         tour.start()
