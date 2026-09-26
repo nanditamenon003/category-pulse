@@ -18,8 +18,8 @@ What the pages show:
     explains what will appear there. A short welcome guide opens once per
     visit and ends with "Take the 2-minute tour" or "Skip".
   - the tour, and guests: the Sample Store, a made-up store for learning.
-The AI chat works on the Sample Store only: uploaded figures are never sent
-to an AI provider.
+The AI chat works on any store. For a store's own data it first explains
+that the figures it looks up go to the AI provider, and asks for a clear yes.
 """
 
 import streamlit as st
@@ -89,10 +89,11 @@ if signed_in and store is None and not st.session_state.get("welcomed"):
 tour.render(current_page.title)
 current_page.run()
 
-# --- Floating chat button, Sample Store only -------------------------------------------------
+# --- Floating chat button, whenever there's a store to ask about -------------------------
 # The chat also opens when a category pop-up hands over a question ("Ask the AI
-# about this category"): only one pop-up can be open at a time.
-if store is not None and store.is_demo:
+# about this category"): only one pop-up can be open at a time. For a store's
+# own data, the chat asks for a clear yes before sending any figures to the AI.
+if store is not None:
     clicked = st.button("Ask Category Pulse", key="chat_fab", icon=":material/forum:", type="primary")
     if clicked or st.session_state.pop("open_chat", False):
         views.chat_dialog()

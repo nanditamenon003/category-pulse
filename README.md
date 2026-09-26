@@ -26,7 +26,7 @@
 - **Guided tour:** "Take the 2-minute tour" walks through the site in seven stops on the Sample Store. It moves between pages by itself and outlines what to look at on each one.
 
 - **Category detail:** tap any category for a pop-up with four tabs: *Why*, *Stock by size*, *Shoppers* and *Sell*.
-- **Chat:** on the Sample Store, the **Ask Category Pulse** button (bottom right) opens the AI chat.
+- **Chat:** the **Ask Category Pulse** button (bottom right) opens the AI chat. On your own data it asks once per visit before sending any figures to the AI.
 - **Time:** the time button (top right) steps through the day, and every page follows it.
 - **Account:** the account button (top right) shows who is signed in, with **Log out**.
 
@@ -68,7 +68,7 @@ The **Your data** page has an Excel template with a *Read me* sheet explaining e
 - Ordinary spreadsheet habits are fine: report titles above the table, numbers like 1,200, times like 2 PM, names in different capitals, returns as negative units, and a stock count taken the next morning. Categories without a target are left out with a note, and every problem in a file is listed at once.
 - If an export doesn't start on the 1st of the month, the upload warns that the missing days count as no sales.
 - Before switching over, the page shows which features the data supports and what would switch the rest on. Anything a page can't show is explained ("Not in your data: stock counts..."), never guessed.
-- **Privacy:** uploaded data is read for the visitor's session only and not saved. "Remove my data" clears it. The **AI chat and the tour stay with the Sample Store**, so uploaded figures are never sent to an AI provider. Only upload real company figures with the owner's approval.
+- **Privacy:** uploaded data is read for the visitor's session only and not saved. "Remove my data" clears it. The **AI chat works on uploaded data only after a clear yes**: before its first answer in a visit, it explains that the figures it looks up are sent to its AI provider (DeepSeek) and asks the person to continue only with dummy data or approved figures. Only upload real company figures with the owner's approval.
 
 ### The Sample Store's month
 
@@ -180,5 +180,5 @@ category-pulse/
 - Uploaded data is read as at the close of its latest day. Stock alerts are only as detailed as the stock counts supplied (a daily count gives "by today's close", not the hour).
 - When core sizes aren't given, they're learned from sales, which can pick the wrong sizes when sales are few. The upload page shows them so they can be checked and corrected in the template.
 - Projections assume the rest of the month keeps the same pace against plan, and are clearly labelled.
-- The AI chat works on the Sample Store only. Each question is answered on its own (no conversation memory), and answers take roughly 5 to 30 seconds while the AI looks things up.
+- On uploaded data, the AI chat sends the figures it looks up to DeepSeek (after asking), which suits dummy data and demos; a real-data pilot would need a provider the company approves. Each question is answered on its own (no conversation memory), and answers take roughly 5 to 30 seconds while the AI looks things up.
 - A real-data pilot would need the store's approval, and an AI provider the company approves.

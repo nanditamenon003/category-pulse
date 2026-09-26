@@ -11,9 +11,11 @@ The provider is one setting in config.py (AI_PROVIDER). The code uses the
 Anthropic Messages API; DeepSeek's Anthropic-compatible endpoint runs the
 same code unchanged.
 
-The chat runs on the demo store only: a store's own uploaded data is never
-sent to an AI provider. Its tools still read through a Store, like the rest
-of the app.
+It works on the Sample Store or on a store's own uploaded data. For uploaded
+data the app first asks the person to agree, because answering means sending
+that store's numbers to the AI provider. The tools, and the description of
+the store the model receives, are built from whichever store is being asked
+about, and tools for data the store doesn't have are left out.
 """
 
 import json
@@ -25,16 +27,8 @@ import kpi
 import loyalty
 import staffing
 import stock
-from config import (
-    AI_MAX_TOKENS,
-    AI_PROVIDER,
-    AI_PROVIDERS,
-    CATEGORIES,
-    DEPARTMENTS,
-    LINES,
-    MAX_TOOL_ITERATIONS,
-)
-from store import resolve
+from config import AI_MAX_TOKENS, AI_PROVIDER, AI_PROVIDERS, MAX_TOOL_ITERATIONS
+from store import MISSING_LABEL, resolve
 
 load_dotenv()
 
@@ -45,8 +39,36 @@ class AgentError(Exception):
     """Raised for problems the app should show as a friendly message, not a traceback."""
 
 
+SAMPLE_STORE_GUIDE = """\
+- Departments (floor zones): Menswear, Womenswear, Kidswear.
+- Lines: Men Casual, Men Formal, Men Denim, Women, and kids lines Boys and Girls (8-16 years) \
+and Little Boys and Little Girls (2-7 years).
+- A category is "<line> <product type>", e.g. "Women Tops". Everyday names: "chinos" means \
+Men Casual Trousers; "jeans" means Jeans (Men Denim Jeans for men); "formal wear" means \
+the Men Formal line; "polos" means Men Casual Polos; "womenswear" means the Women line; "kidswear" \
+means Boys, Girls, Little Boys and Little Girls."""
+
+
+def _store_guide(store):
+    """How the store is organised, in the model's instructions."""
+    if store.is_demo:
+        return SAMPLE_STORE_GUIDE
+    lines = "; ".join(f"{line} ({floor})" for line, floor in store.lines.items())
+    guide = (f"- Floors (zones): {', '.join(store.departments)}.\n"
+             f"- Lines, with the floor each is on: {lines}.\n"
+             f"- A category is \"<line> <product type>\", e.g. \"{store.categories[0]}\". When someone "
+             f"uses an everyday word, match it to the closest category name.")
+    missing = [MISSING_LABEL[w] for w in ("stock", "footfall", "transactions", "loyalty")
+               if not getattr(store, f"has_{w}")]
+    if missing:
+        guide += (f"\n- This store's data has no {', '.join(missing)}, so the tools that need them "
+                  f"aren't available. If a question needs that data, say so plainly.")
+    return guide
+
+
 def build_system_prompt(current_hour, store):
-    now = "20:00, closing time" if current_hour == 19 else f"{current_hour + 1}:00"
+    last = store.hours[-1]
+    now = f"{last + 1}:00, closing time" if current_hour == last else f"{current_hour + 1}:00"
     return f"""You are Category Pulse, an internal assistant for the manager and sales associates \
 of a single clothing store. You help the floor team act on category performance. You never talk \
 to customers.
@@ -56,13 +78,7 @@ Where things stand: it is day {store.today_day} of a {store.days_in_month}-day m
 selling hour, so data "as of hour 16" runs to 17:00; when you mention the time, say {now}.
 
 How the store is organised:
-- Departments (floor zones): Menswear, Womenswear, Kidswear.
-- Lines: Men Casual, Men Formal, Men Denim, Women, and kids lines Boys and Girls (8-16 years) \
-and Little Boys and Little Girls (2-7 years).
-- A category is "<line> <product type>", e.g. "Women Tops". Everyday names: "chinos" means \
-Men Casual Trousers; "jeans" means Jeans (Men Denim Jeans for men); "formal wear" means \
-the Men Formal line; "polos" means Men Casual Polos; "womenswear" means the Women line; "kidswear" \
-means Boys, Girls, Little Boys and Little Girls.
+{_store_guide(store)}
 - Targets are monthly. Pace is month-to-date: units sold so far vs what the target implies by \
 now. Statuses: behind; drifting (slipping, but could still be normal ups and downs); on_pace; \
 ahead; too_early (too few units expected to judge).
@@ -73,8 +89,8 @@ a tool fails or has no data, say so plainly instead of guessing.
 2. Keep actual numbers separate from projections, and label projections as such ("if the \
 current rate continues..."). Never assume what a future delivery will contain: if past \
 deliveries came without some sizes, say so, and don't promise the next one will fix it.
-3. When a category is behind or drifting, investigate before answering: check its stock health \
-(check_size_runs), its deliveries (get_stock_history), and visitors vs buyers \
+3. When a category is behind or drifting, investigate before answering with the tools you have: \
+its stock health (check_size_runs), its deliveries (get_stock_history), and visitors vs buyers \
 (get_conversion_metrics). Name the cause: a stockout; a broken size run (core sizes gone while \
 the shelf still looks full, which is different from a stockout); a traffic problem (fewer \
 visitors); a conversion problem (normal visitors, fewer buying); or no clear cause. Don't \
@@ -93,15 +109,6 @@ bullets, no tables, no emoji, no analyst jargon (say "share of visitors who boug
 question or an offer to do more."""
 
 
-def _category(description="Category id, e.g. 'Women Tops'."):
-    return {"type": "string", "enum": CATEGORIES, "description": description}
-
-
-_LINE = {"type": "string", "enum": list(LINES), "description": "Line, e.g. 'Men Casual' or 'Women'."}
-_ZONE = {"type": "string", "enum": DEPARTMENTS, "description": "Floor zone."}
-_HOUR = {"type": "integer", "description": "Store hour slot (10-19). Omit for now."}
-
-
 def _tool(name, description, properties=None, required=None):
     return {
         "name": name,
@@ -114,63 +121,87 @@ def _tool(name, description, properties=None, required=None):
     }
 
 
-TOOLS = [
-    _tool("get_category_pace",
-          "Month-to-date pace for all categories, or one category or line: units sold, expected by "
-          "now, % vs pace, status, units per day needed vs actual, and a labelled month-end "
-          "projection. Start here to see what needs attention.",
-          {"category": _category(), "line": _LINE, "hour": _HOUR}),
-    _tool("get_today_pace",
-          "Today's sales so far vs what a typical day would have sold by now, per line.",
-          {"line": _LINE, "hour": _HOUR}),
-    _tool("get_contribution",
-          "Month-to-date units and value by line and category, each as a share of the store "
-          "(the store's contribution report).",
-          {"hour": _HOUR}),
-    _tool("get_stock_health_report",
-          "Every category whose stock isn't healthy right now: stockouts, broken size runs, "
-          "running out. Use for 'is anything low on stock?'."),
-    _tool("check_size_runs",
-          "Stock health verdict for one category: stockout, broken_size_run (core sizes gone "
-          "while total stock still looks fine), running_out, or healthy, with the numbers.",
-          {"category": _category()}, ["category"]),
-    _tool("get_stock_status",
-          "Units left by size for one category right now, which sizes are out, and the core sizes.",
-          {"category": _category()}, ["category"]),
-    _tool("get_stock_history",
-          "One category's recent stock by day, every delivery received this month with the sizes "
-          "in it, and scheduled deliveries that never arrived. Use to find the cause of a stock "
-          "problem.",
-          {"category": _category()}, ["category"]),
-    _tool("get_last_piece_alerts",
-          "Sizes that dropped to their last unit today, with the hour and whether it is a core size."),
-    _tool("get_days_of_cover",
-          "Projection of how many days each size of a category will last at its recent selling "
-          "rate, and which are likely to run out before the next delivery.",
-          {"category": _category()}, ["category"]),
-    _tool("get_footfall",
-          "Visitors to a floor zone today so far vs a typical day of the same kind, plus the last "
-          "7 days. Give a zone, or a category or line to use its zone.",
-          {"zone": _ZONE, "category": _category(), "line": _LINE, "hour": _HOUR}),
-    _tool("get_conversion_metrics",
-          "Visitors vs buyers for a category, line or zone: share of visitors who bought, units "
-          "per transaction, and a reading of whether a slowdown is a traffic problem, a conversion "
-          "problem, a possible dip, or too small to judge. Its 'recent' window is the last 3 days "
-          "plus today (not 7 days), compared with the first half of the month.",
-          {"category": _category(), "line": _LINE, "zone": _ZONE}),
-    _tool("get_staffing_recommendation",
-          "Tomorrow's peak hours per floor zone from past days of the same kind, a suggested floor "
-          "team split at the busiest hour, the days it's based on, and delivery-day notes."),
-    _tool("get_cross_sell_ideas",
-          "Cross-sell ideas for categories behind pace, adapted to the cause (substitute for a "
-          "stockout, available sizes for a broken size run, a complementary pairing otherwise), "
-          "each naming a loyalty tier and offer, with any supply action."),
-    _tool("get_tier_playbook",
-          "Loyalty tiers for one category ranked by cross-sell response, with each tier's "
-          "preferred offer phrased for the till. Tier-level data only.",
-          {"category": _category()}, ["category"]),
-]
+# What each tool needs in a store's data (has_* names); tools without it are left out.
+TOOL_NEEDS = {
+    "get_stock_health_report": ("stock",), "check_size_runs": ("stock",),
+    "get_stock_status": ("stock",), "get_stock_history": ("stock",),
+    "get_last_piece_alerts": ("stock",), "get_days_of_cover": ("stock",),
+    "get_footfall": ("footfall",), "get_conversion_metrics": ("footfall", "transactions"),
+    "get_staffing_recommendation": ("visitor_hours",), "get_tier_playbook": ("loyalty",),
+}
 
+
+def build_tools(store):
+    """The tool definitions for one store: its own categories, lines and floors, and only the
+    tools its data can answer."""
+    def category():
+        return {"type": "string", "enum": store.categories,
+                "description": f"Category id, e.g. '{store.categories[0]}'."}
+
+    line = {"type": "string", "enum": list(store.lines),
+            "description": f"Line, e.g. '{next(iter(store.lines))}'."}
+    zone = {"type": "string", "enum": store.departments, "description": "Floor zone."}
+    hour = {"type": "integer",
+            "description": f"Store hour slot ({store.hours[0]}-{store.hours[-1]}). Omit for now."}
+
+    tools = [
+        _tool("get_category_pace",
+              "Month-to-date pace for all categories, or one category or line: units sold, expected "
+              "by now, % vs pace, status, units per day needed vs actual, and a labelled month-end "
+              "projection. Start here to see what needs attention.",
+              {"category": category(), "line": line, "hour": hour}),
+        _tool("get_today_pace",
+              "Today's sales so far vs what a typical day would have sold by now, per line.",
+              {"line": line, "hour": hour}),
+        _tool("get_contribution",
+              "Month-to-date units and value by line and category, each as a share of the store "
+              "(the store's contribution report).",
+              {"hour": hour}),
+        _tool("get_stock_health_report",
+              "Every category whose stock isn't healthy right now: stockouts, broken size runs, "
+              "running out. Use for 'is anything low on stock?'."),
+        _tool("check_size_runs",
+              "Stock health verdict for one category: stockout, broken_size_run (core sizes gone "
+              "while total stock still looks fine), running_out, or healthy, with the numbers.",
+              {"category": category()}, ["category"]),
+        _tool("get_stock_status",
+              "Units left by size for one category right now, which sizes are out, and the core sizes.",
+              {"category": category()}, ["category"]),
+        _tool("get_stock_history",
+              "One category's recent stock by day, every delivery received this month with the "
+              "sizes in it, and scheduled deliveries that never arrived. Use to find the cause of a "
+              "stock problem.",
+              {"category": category()}, ["category"]),
+        _tool("get_last_piece_alerts",
+              "Sizes that dropped to their last unit today, with the hour and whether it is a core size."),
+        _tool("get_days_of_cover",
+              "Projection of how many days each size of a category will last at its recent selling "
+              "rate, and which are likely to run out before the next delivery.",
+              {"category": category()}, ["category"]),
+        _tool("get_footfall",
+              "Visitors to a floor zone today so far vs a typical day of the same kind, plus the "
+              "last 7 days. Give a zone, or a category or line to use its zone.",
+              {"zone": zone, "category": category(), "line": line, "hour": hour}),
+        _tool("get_conversion_metrics",
+              "Visitors vs buyers for a category, line or zone: share of visitors who bought, units "
+              "per transaction, and a reading of whether a slowdown is a traffic problem, a "
+              "conversion problem, a possible dip, or too small to judge. Its 'recent' window is "
+              "the last 3 days plus today (not 7 days), compared with the first half of the month.",
+              {"category": category(), "line": line, "zone": zone}),
+        _tool("get_staffing_recommendation",
+              "Tomorrow's peak hours per floor zone from past days of the same kind, a suggested "
+              "floor team split at the busiest hour, the days it's based on, and delivery-day notes."),
+        _tool("get_cross_sell_ideas",
+              "Cross-sell ideas for categories behind pace, adapted to the cause (substitute for a "
+              "stockout, available sizes for a broken size run, a complementary pairing otherwise), "
+              "naming a loyalty tier and offer where there's loyalty data, with any supply action."),
+        _tool("get_tier_playbook",
+              "Loyalty tiers for one category ranked by cross-sell response, with each tier's "
+              "preferred offer phrased for the till. Tier-level data only.",
+              {"category": category()}, ["category"]),
+    ]
+    return [t for t in tools
+            if all(getattr(store, f"has_{need}") for need in TOOL_NEEDS.get(t["name"], ()))]
 
 def _build_tool_dispatch(current_hour, store):
     """
@@ -225,7 +256,7 @@ def get_client():
     return Anthropic(api_key=api_key)
 
 
-def ask(question, current_hour=None, client=None):
+def ask(question, current_hour=None, client=None, store=None):
     """
     Sends a question to the model with tools enabled, runs the tool-call loop
     until it has a final answer, and returns (answer_text, tool_call_log).
@@ -244,9 +275,10 @@ def ask(question, current_hour=None, client=None):
     except AgentError as e:
         return str(e), tool_call_log
 
-    store, _, current_hour = resolve(hour=current_hour)  # the demo store
+    store, _, current_hour = resolve(store, hour=current_hour)  # the Sample Store unless given
     dispatch = _build_tool_dispatch(current_hour, store)
     system = build_system_prompt(current_hour, store)
+    tools = build_tools(store)
     messages = [{"role": "user", "content": question}]
 
     def call_model():
@@ -254,7 +286,7 @@ def ask(question, current_hour=None, client=None):
             model=PROVIDER["model"],
             max_tokens=AI_MAX_TOKENS,
             system=system,
-            tools=TOOLS,
+            tools=tools,
             messages=messages,
         )
 

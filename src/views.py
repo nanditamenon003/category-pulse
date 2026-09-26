@@ -157,7 +157,8 @@ def _your_store_note(s):
         '<div class="cp-panel"><div class="cp-panel-title">Your store</div>'
         f'<p>Showing your uploaded data for {esc(s.month_name)} {s.month_start.year}, as at the '
         f'close of day {s.today_day}. It\'s read for this visit only and isn\'t saved, and to keep it '
-        'private the AI chat isn\'t used with it. To replace or remove it, go to Your data.</p>'
+        'private, the AI chat asks before it sends any of your figures to its AI service. To replace or '
+        'remove your data, go to Your data.</p>'
         + "".join(f'<p class="cp-small">Note: {esc(w)}</p>' for w in s.warnings)
         + '</div>'
     )
@@ -320,7 +321,7 @@ def category_dialog(category):
     with sell:
         _sell_tab(category, detail, hour)
 
-    if current_store().is_demo and st.button("Ask the AI about this category", icon=":material/forum:",
+    if st.button("Ask the AI about this category", icon=":material/forum:",
                                              key="ask_about"):
         status_word = STATUS[p["status"]][0].lower()
         st.session_state["chat_pending"] = (f"{category} is {status_word} this month. Why, and what "
@@ -1045,8 +1046,8 @@ def your_data_page():
         html_block(f'<div class="cp-panel"><p><b>Welcome{", " + esc(name) if name else ""}.</b> Three steps '
                    'and every page fills in with your store\'s numbers.</p>'
                    '<p class="cp-small">Only use real company figures with your manager\'s approval. '
-                   'Your file is read for this visit only and isn\'t saved, and the AI chat isn\'t '
-                   'used with it.</p></div>')
+                   'Your file is read for this visit only and isn\'t saved, and the AI chat asks before '
+                   'using it.</p></div>')
         if st.button("Take the 2-minute tour first", key="data_tour", icon=":material/tour:",
                      type="tertiary"):
             tour.start()
@@ -1151,7 +1152,8 @@ def guide_page():
                  'targets and sales (and, if you have them, stock counts, visitor counts and loyalty '
                  'figures), upload it, and every page switches to your store. The more you add, the '
                  'more the app can tell you; it says plainly what\'s missing rather than guessing. To '
-                 'keep your data private, the AI chat isn\'t used with it.</p></div>')
+                 'keep your data private, the AI chat asks before it sends any of your figures to its AI '
+                 'service.</p></div>')
 
     html_block(heading("How the AI chat works")
                + '<div class="cp-panel"><p>Ask Category Pulse answers by looking up the store\'s '
@@ -1162,23 +1164,68 @@ def guide_page():
 
 # --- Chat pop-up -----------------------------------------------------------------------------
 
+def _suggestions(store):
+    """Suggested questions: the Sample Store's own, or ones any store's data can answer."""
+    if store.is_demo:
+        return SUGGESTED_QUESTIONS
+    questions = {"What needs action?": "Which categories need action right now, and why?"}
+    if store.has_stock:
+        questions["Anything low on stock?"] = "Is anything low on stock?"
+    questions["Cross-sell ideas"] = "Any cross-sell ideas right now?"
+    if store.has_visitor_hours and store.today_day < store.days_in_month:
+        questions["Staffing for tomorrow"] = "What should staffing look like tomorrow?"
+    questions["How's the month going?"] = "How is the month going overall, and where will we finish?"
+    return questions
+
+
 def _queue_suggestion():
     """Chip clicked: queue its full question and clear the chip so it can be clicked again."""
     label = st.session_state.get("chat_chip")
     if label:
-        st.session_state["chat_pending"] = SUGGESTED_QUESTIONS[label]
+        st.session_state["chat_pending"] = _suggestions(current_store())[label]
     st.session_state["chat_chip"] = None
+
+
+def _agree_to_chat(store_id):
+    st.session_state["chat_consent"] = store_id
+
+
+def _chat_notice(store):
+    """
+    Before the chat answers about a store's own data: say plainly that the
+    figures it looks up go to the AI service, and ask for a clear yes. Asked
+    once per visit. Returns True once agreed.
+    """
+    if store.is_demo or st.session_state.get("chat_consent") == store.id:
+        return True
+    html_block('<div class="cp-panel"><div class="cp-panel-title">Before you ask about your data</div>'
+               f'<p>To answer, the chat sends the figures it looks up from your data (for example '
+               f'sales, targets and stock by category) to {esc(agent.PROVIDER["name"])}, the AI service '
+               'behind it. Category Pulse doesn\'t keep them after your visit.</p>'
+               '<p><b>Only continue with dummy data, or with real figures your manager has approved '
+               'for use with an outside AI service.</b></p></div>')
+    with st.container(horizontal=True, gap="small"):
+        st.button("I understand, continue", key="chat_agree", type="primary",
+                  on_click=_agree_to_chat, args=[store.id])
+        if st.button("Cancel", key="chat_cancel", type="tertiary"):
+            st.session_state.pop("chat_pending", None)
+            st.rerun()
+    return False
 
 
 @st.dialog("Ask Category Pulse", width="large")
 def chat_dialog():
+    store = current_store()
+    if not _chat_notice(store):
+        return
     hour = current_hour()
-    st.session_state.setdefault("chat", [])
+    history_key = f"chat_{store.id}"  # each store keeps its own conversation
+    st.session_state.setdefault(history_key, [])
     st.session_state.setdefault("questions_asked", 0)
 
     # Filled in at the end, so the "questions left" count includes this answer.
     status_line = st.empty()
-    st.pills("Suggested questions", list(SUGGESTED_QUESTIONS), key="chat_chip",
+    st.pills("Suggested questions", list(_suggestions(store)), key="chat_chip",
              on_change=_queue_suggestion, label_visibility="collapsed")
 
     conversation = st.container(height=420, border=False, autoscroll=True)
@@ -1186,9 +1233,9 @@ def chat_dialog():
     question = st.session_state.pop("chat_pending", None) or typed
 
     with conversation:
-        for turn in st.session_state["chat"]:
+        for turn in st.session_state[history_key]:
             _render_turn(turn)
-        if not st.session_state["chat"] and not question:
+        if not st.session_state[history_key] and not question:
             st.markdown('<div class="cp-small">Pick a suggested question or type your own. '
                         'Each answer shows how it was worked out.</div>', unsafe_allow_html=True)
 
@@ -1203,11 +1250,11 @@ def chat_dialog():
                 with waiting.container():
                     st.markdown(f'<div class="cp-you">{esc(question)}</div>', unsafe_allow_html=True)
                     with st.spinner("Checking the numbers..."):
-                        answer, calls = agent.ask(question, current_hour=hour)
+                        answer, calls = agent.ask(question, current_hour=hour, store=store)
                 waiting.empty()
                 st.session_state["questions_asked"] += 1
                 turn = {"question": question, "answer": answer, "calls": calls}
-            st.session_state["chat"].append(turn)
+            st.session_state[history_key].append(turn)
             _render_turn(turn)
 
     left = max(DEMO_QUESTION_LIMIT - st.session_state["questions_asked"], 0)
