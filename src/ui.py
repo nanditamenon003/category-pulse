@@ -167,6 +167,18 @@ header[data-testid="stHeader"] {{ background: {PAGE}; border-bottom: 1px solid {
 .cp-tour-text {{ font-size: 14px; color: {TEXT}; line-height: 1.55; }}
 .st-key-tour_card {{ margin-bottom: 8px; }}
 
+/* Welcome page */
+.cp-hero {{ max-width: 760px; margin: 28px 0 20px; }}
+.cp-hero-brand {{ font-size: 15px; font-weight: 700; color: {TEXT}; margin-bottom: 16px; }}
+.cp-hero-title {{ font-size: 34px; font-weight: 700; color: {TEXT}; line-height: 1.2; margin-bottom: 12px; }}
+.cp-hero-sub {{ font-size: 17px; color: {MUTED}; line-height: 1.55; }}
+.cp-features {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px;
+               margin-top: 32px; max-width: 900px; }}
+.cp-feature {{ background: {CARD}; border: 1px solid {BORDER}; border-radius: 8px; padding: 14px 16px; }}
+.cp-feature-title {{ font-size: 15px; font-weight: 700; color: {TEXT}; margin-bottom: 4px; }}
+.cp-feature-text {{ font-size: 14px; color: {TEXT}; line-height: 1.5; }}
+.st-key-welcome_actions {{ margin-bottom: 4px; }}
+
 /* Guide page */
 .cp-term {{ font-size: 14px; color: {TEXT}; margin: 6px 0; line-height: 1.55; }}
 .cp-term b {{ font-weight: 700; }}
@@ -193,6 +205,8 @@ header[data-testid="stHeader"] {{ background: {PAGE}; border-bottom: 1px solid {
   [class*="st-key-cards_"] > div:has(> [class*="st-key-click_cat_"]),
   [class*="st-key-cards_"] > [class*="st-key-click_cat_"] {{ max-width: none; flex-basis: 100%; }}
   .cp-num {{ font-size: 24px; }}
+  .cp-hero-title {{ font-size: 26px; }}
+  .cp-hero-sub {{ font-size: 16px; }}
   .block-container {{ padding-top: 4rem; }}
   /* On phones the chat button shrinks to a round icon so it covers less content. */
   .st-key-chat_fab {{ right: 12px; bottom: 76px; }}

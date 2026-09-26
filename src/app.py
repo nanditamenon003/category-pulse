@@ -4,9 +4,11 @@ Category Pulse web app: the frame around every page.
 Run from the project folder with:  streamlit run src/app.py
 
 Layers:
+  0. The welcome page (account.py) for anyone not signed in: log in, create
+     an account, or look around as a guest.
   1. The frame (this file): name, which store's data is showing, time button,
-     top menu, the guided tour card, and a floating "Ask Category Pulse"
-     button on every page.
+     account menu, top menu, the guided tour card, and a floating "Ask
+     Category Pulse" button on every page.
   2. Pages (views.py): Today, Categories, Stock, Floor and staff, Sell,
      Summary, Your data, Guide.
   3. Pop-ups on top of a page: category details and the chat.
@@ -18,6 +20,7 @@ AI provider.
 
 import streamlit as st
 
+import account
 import tour
 import views
 from ui import (
@@ -34,6 +37,14 @@ from ui import (
 
 st.set_page_config(page_title="Category Pulse", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(CSS, unsafe_allow_html=True)
+
+# --- Signed out: only the welcome page -------------------------------------------------------
+signed_in = account.is_signed_in()
+if not signed_in and not account.is_guest():
+    st.navigation([st.Page(account.welcome_page, title="Category Pulse", default=True)],
+                  position="hidden").run()
+    st.stop()
+
 apply_store_switch()  # before any widget is drawn
 store = current_store()  # builds the Sample Store's data on a fresh deployment, once
 
@@ -53,6 +64,13 @@ PAGES = {
 }
 tour.PAGES = PAGES
 current_page = st.navigation(list(PAGES.values()), position="top")
+
+# Uploaded data isn't kept between visits, so each visit starts on Your data:
+# upload the store's figures, or explore the Sample Store.
+if signed_in and not st.session_state.get("visit_started"):
+    st.session_state["visit_started"] = True
+    if st.session_state.get("my_store") is None and current_page.title != "Your data":
+        st.switch_page(PAGES["Your data"])
 
 
 def _on_store_choice():
@@ -83,6 +101,7 @@ with st.container(horizontal=True, horizontal_alignment="distribute", vertical_a
                 )
         else:
             html_block(f'<span class="cp-datalabel">Close of {esc(today_label())}</span>')
+        account.account_menu()
 
 tour.render(current_page.title)
 current_page.run()
