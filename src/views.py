@@ -69,8 +69,8 @@ SUGGESTED_QUESTIONS = {
     "Staffing for tomorrow": "What should staffing look like tomorrow?",
     "Cross-sell ideas": "Any cross-sell ideas right now?",
     "Why is womenswear behind?": "Why is womenswear behind? Is it traffic or conversion?",
-    "Chinos: who to target?": ("Chinos (THM Non Denim Bottom) are behind: which customers should we "
-                               "focus on, and with what offer?"),
+    "Trousers: who to target?": ("Men Casual Trousers are behind: which customers should we focus "
+                                 "on, and with what offer?"),
 }
 
 STOCK_VERDICT = {
@@ -93,8 +93,9 @@ def _your_store_note(s):
     html_block(
         '<div class="cp-panel"><div class="cp-panel-title">Your store</div>'
         f'<p>Showing your uploaded data for {esc(s.month_name)} {s.month_start.year}, as at the '
-        f'close of day {s.today_day}. It\'s read for this session only and isn\'t saved, and the AI '
-        'chat and tour stay with the demo store. Switch between them at the top of the page.</p>'
+        f'close of day {s.today_day}. It\'s read for this session only and isn\'t saved. To keep it '
+        'private, the AI chat and the tour aren\'t used with your own data. Switch stores at the top '
+        'of the page.</p>'
         '</div>'
     )
 
@@ -106,12 +107,10 @@ def _start_here():
     s = current_store()
     html_block(
         '<div class="cp-panel"><div class="cp-panel-title">Start here</div>'
-        f'<p>This is a demo store with simulated data, shown on day {s.today_day} of a '
-        f'{s.days_in_month}-day {s.month_name}. '
-        'The sales, stock and visitors are made up but behave like a real store, and a few real '
-        'problems are hidden in the numbers.</p>'
+        f'<p>Category Pulse watches every category against its monthly target. It\'s day '
+        f'{s.today_day} of {s.days_in_month}, and a few categories need attention.</p>'
         '<p><b>New here?</b> Take the 2-minute tour, or explore on your own: tap '
-        '<b>THM Non Denim Bottom</b> below to see why it\'s behind, open <b>Ask Category Pulse</b> '
+        '<b>Men Casual Trousers</b> below to see why it\'s behind, open <b>Ask Category Pulse</b> '
         '(bottom right) to question the data, or use the time button (top right) to rewind the '
         'day.</p></div>'
     )
@@ -804,7 +803,7 @@ def summary_page():
                        mime="text/plain")
 
     report = contribution_at(hour)
-    html_block(heading(f"{s.month_name} contribution, month to date",
+    html_block(heading("Contribution, month to date",
                        f"as of day {s.today_day}, {time_label(hour)}")
                + '<div class="cp-check">Totals checked automatically: '
                + esc("; ".join(report["checks_passed"])) + ".</div>")
@@ -914,10 +913,12 @@ def _upload_preview(store, notes):
 def your_data_page():
     page_title("Your data", "See your own store in Category Pulse: fill in the Excel template, upload "
                             "it, and every page switches to your numbers.")
-    html_block('<div class="cp-panel"><p><b>Before you upload:</b> this is a public demo, so only use '
-               'real company figures with your manager\'s approval. Your file is read for this '
-               'session only and isn\'t saved, and the AI chat is switched off for uploaded data.'
-               '</p></div>')
+    html_block('<div class="cp-panel"><p>Until you upload your own data, the pages show the '
+               '<b>Sample Store</b>: a made-up store with realistic numbers and a few problems '
+               'hidden in them, so you can see what Category Pulse does.</p>'
+               '<p><b>Before you upload:</b> only use real company figures with your manager\'s '
+               'approval. Your file is read for this session only and isn\'t saved, and the AI chat '
+               'isn\'t used with uploaded data.</p></div>')
 
     mine = st.session_state.get("my_store")
     if mine is not None:
@@ -926,11 +927,11 @@ def your_data_page():
                    + f'<div class="cp-panel"><p><b>{esc(mine.name)}</b>: {esc(mine.month_name)} '
                      f'{mine.month_start.year}, up to day {mine.today_day}. '
                    + ("Every page is showing it now." if showing
-                      else "Loaded, but the pages are showing the demo store.")
+                      else "Loaded, but the pages are showing the Sample Store.")
                    + "</p></div>")
         with st.container(horizontal=True, gap="small", vertical_alignment="center"):
             if showing:
-                if st.button("Back to the demo", key="mine_to_demo"):
+                if st.button("Back to the Sample Store", key="mine_to_demo"):
                     request_store(False)
                     st.rerun()
             elif st.button("Show my store", key="mine_show", type="primary"):
@@ -944,15 +945,15 @@ def your_data_page():
                + '<div class="cp-panel"><p>One Excel file with a sheet for each kind of data. '
                  '<b>Targets</b> and <b>Sales</b> are required. <b>Stock</b>, <b>Visitors</b>, '
                  '<b>Loyalty</b> and <b>Settings</b> are optional, and each one switches on more of '
-                 'the app. The Read me sheet explains every column. The sample is the demo store\'s '
-                 'May, filled in, so you can see exactly what goes where.</p></div>')
+                 'the app. The Read me sheet explains every column. The sample file is the Sample '
+                 'Store\'s month, filled in, so you can see exactly what goes where.</p></div>')
     with st.container(horizontal=True, gap="small", wrap=True):
         st.download_button("Download the template", data=upload.template_bytes(), mime=XLSX,
                            file_name="category-pulse-template.xlsx", icon=":material/download:")
         with st.spinner("Preparing the sample..."):
             sample = upload.sample_bytes()
-        st.download_button("Download the sample (demo May)", data=sample, mime=XLSX,
-                           file_name="category-pulse-sample-may.xlsx", icon=":material/download:")
+        st.download_button("Download the sample file", data=sample, mime=XLSX,
+                           file_name="category-pulse-sample-store.xlsx", icon=":material/download:")
 
     html_block(heading("2. Upload it", "the filled-in template, or one CSV file per sheet, e.g. sales.csv"))
     files = st.file_uploader("Upload your data", type=["xlsx", "csv"], accept_multiple_files=True,
@@ -967,7 +968,7 @@ def your_data_page():
     if st.button("Or try it with the sample file", key="try_sample", icon=":material/science:",
                  type="tertiary"):
         with st.spinner("Reading the sample..."):
-            _read_upload([("category-pulse-sample-may.xlsx", sample)])
+            _read_upload([("category-pulse-sample-store.xlsx", sample)])
 
     result = st.session_state.get("upload_result")
     if result is None:
@@ -1024,12 +1025,9 @@ def guide_page():
         tour.start()
 
     html_block(heading("What this is")
-               + '<div class="cp-panel"><p>A demo of an assistant for a clothing store\'s floor '
-                 'team. It watches every category against its monthly target, finds what\'s '
-                 'genuinely behind, works out why, and suggests what to do while there\'s still '
-                 f'time. The store is simulated: it\'s day {s.today_day} of a {s.days_in_month}-day '
-                 f'{s.month_name}, and every '
-                 'number is generated. No real store or customer data is used.</p></div>')
+               + '<div class="cp-panel"><p>An assistant for a clothing store\'s floor team. It '
+                 'watches every category against its monthly target, finds what\'s genuinely '
+                 'behind, works out why, and suggests what to do while there\'s still time.</p></div>')
 
     html_block(heading("What the statuses mean")
                + '<div class="cp-panel">'
@@ -1046,15 +1044,14 @@ def guide_page():
                + '<div class="cp-panel"><p>The Your data page has an Excel template. Fill in your '
                  'targets and sales (and, if you have them, stock counts, visitor counts and loyalty '
                  'figures), upload it, and every page switches to your store. The more you add, the '
-                 'more the app can tell you; it says plainly what\'s missing rather than guessing. The '
-                 'AI chat and the tour stay with the demo store.</p></div>')
+                 'more the app can tell you; it says plainly what\'s missing rather than guessing. To '
+                 'keep your data private, the AI chat isn\'t used with it.</p></div>')
 
     html_block(heading("How the AI chat works")
                + '<div class="cp-panel"><p>Ask Category Pulse answers by looking up the store\'s '
                  'numbers with the same calculations the pages use, and never guesses a figure. '
                  'Under each answer, "How I got this" lists every lookup and the numbers it '
-                 f'returned. It runs on {esc(agent.PROVIDER["name"])} and allows '
-                 f'{DEMO_QUESTION_LIMIT} questions per visit on this public demo.</p></div>')
+                 f'returned. You can ask up to {DEMO_QUESTION_LIMIT} questions per visit.</p></div>')
 
 
 # --- Chat pop-up -----------------------------------------------------------------------------
@@ -1092,8 +1089,8 @@ def chat_dialog():
         if question:
             if st.session_state["questions_asked"] >= DEMO_QUESTION_LIMIT:
                 turn = {"question": question, "calls": [],
-                        "answer": (f"This demo allows {DEMO_QUESTION_LIMIT} questions per visit, and "
-                                   f"they've been used. Everything else on the site still works.")}
+                        "answer": (f"You've used the {DEMO_QUESTION_LIMIT} questions allowed per visit. "
+                                   f"Everything else on the site still works.")}
             else:
                 # Show the question with a spinner while the AI works, then swap in the answer.
                 waiting = st.empty()

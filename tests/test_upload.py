@@ -41,7 +41,7 @@ def test_sample_round_trip():
                       for r in stock.get_stock_health_report(hour=close, store=d)]
     causes = {x["category"]: x["cause"] for x in diagnosis.diagnose_store(store=s)}
     assert causes == {x["category"]: x["cause"] for x in diagnosis.diagnose_store(hour=close, store=d)}
-    chinos = stock.get_stock_history("THM Non Denim Bottom", store=s)["deliveries_received"]
+    chinos = stock.get_stock_history("Men Casual Trousers", store=s)["deliveries_received"]
     assert [(x["day"], x["core_sizes_missing"]) for x in chinos] == [(4, ["32", "34"]), (11, ["32", "34"]),
                                                                        (18, ["32", "34"])]
     print(f"Sample file ({len(upload.sample_bytes()) // 1024} KB) reads back as the demo store at close:")

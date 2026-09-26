@@ -357,7 +357,7 @@ def sample_bytes():
     })
 
     settings = pd.DataFrame({"Setting": SETTINGS_ROWS, "Value": [
-        "Demo store (sample file)", WEEKDAY_NAMES[s.delivery_weekday],
+        "Sample Store (from the sample file)", WEEKDAY_NAMES[s.delivery_weekday],
         ", ".join(str(d) for d in sorted(s.sale_days))]})
 
     return _workbook({"Targets": targets, "Sales": sales, "Stock": stock, "Visitors": visitors,

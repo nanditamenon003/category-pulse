@@ -385,8 +385,8 @@ def _print_stock_health(store):
         core = ", ".join(f"{s}:{u}" for s, u in r["core_remaining_by_size"].items())
         print(f"  {r['category']:<24} {r['verdict']:<16} core [{core}]  total {r['total_remaining']} "
               f"({r['total_as_pct_of_usual']}% of usual {r['usual_stock_level']})")
-    healthy = check_size_runs("TJM Denim Bottom", store=store)
-    print(f"  (control) TJM Denim Bottom: {healthy['verdict']}")
+    healthy = check_size_runs("Men Denim Jeans", store=store)
+    print(f"  (control) Men Denim Jeans: {healthy['verdict']}")
 
 
 def _print_last_piece_alerts(store):
@@ -411,10 +411,10 @@ def _print_days_of_cover(store, category):
 
 if __name__ == "__main__":
     demo, _, _ = resolve()
-    for cat in ("Womens Knit Top", "THM Non Denim Bottom", "TJM Denim Bottom"):
+    for cat in ("Women Tops", "Men Casual Trousers", "Men Denim Jeans"):
         _print_status(demo, cat)
-    for cat in ("Womens Knit Top", "THM Non Denim Bottom", "TJM Denim Bottom"):
+    for cat in ("Women Tops", "Men Casual Trousers", "Men Denim Jeans"):
         _print_history(demo, cat)
     _print_stock_health(demo)
     _print_last_piece_alerts(demo)
-    _print_days_of_cover(demo, "THM Polo")
+    _print_days_of_cover(demo, "Men Casual Polos")

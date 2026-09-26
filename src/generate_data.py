@@ -278,7 +278,8 @@ TIER_PROFILES = {
     "Silver": {"share": 25, "response": 15, "basket": 1.1, "upt": 1.10},
     "Non-member": {"share": 50, "response": 10, "basket": 0.9, "upt": 0.95},
 }
-ALTERATION_PRODUCTS = {"Non Denim Bottom", "Denim Bottom", "Blazer", "Woven Top", "Dress"}
+ALTERATION_PRODUCTS = {"Trousers", "Jeans", "Blazers", "Shirts", "Dresses"}
+KIDS_LINES = ("Boys", "Girls", "Little Boys", "Little Girls")
 
 
 def _tier_adjustments(category):
@@ -286,17 +287,17 @@ def _tier_adjustments(category):
     line, product = CATEGORY_LINE[category], CATEGORY_PRODUCT[category]
     share = {t: 0 for t in TIER_PROFILES}
     response = {t: 0 for t in TIER_PROFILES}
-    if line == "THT" or (line == "THM" and product in ("Blazer", "Non Denim Bottom")):
+    if line == "Men Formal" or (line == "Men Casual" and product in ("Blazers", "Trousers")):
         share["Platinum"] += 6          # tailoring draws the store's best customers
         response["Platinum"] += 12      # a free alteration is hard to refuse
-    if "Bottom" in product:
+    if product in ("Trousers", "Jeans"):
         response["Gold"] += 6           # outfit bundles land well on bottoms
-    if line == "Womens":
+    if line == "Women":
         response["Silver"] += 9         # points multipliers drive womenswear repeat visits
-    if line == "TJM":
+    if line == "Men Denim":
         share["Non-member"] += 8
         response["Non-member"] += 8     # younger, price-led shoppers
-    if line in ("BB", "BG", "LB", "LG"):
+    if line in KIDS_LINES:
         share["Non-member"] += 10
         response["Non-member"] += 11    # parents and gift buyers, often first-timers
         response["Silver"] += 4
@@ -408,9 +409,19 @@ def _print_unplanned_stockouts(stock_df):
 
 DATA_FILES = ("sales", "stock", "footfall", "loyalty_tiers")
 
+# Bump this whenever the Sample Store changes (names, scenarios, rules), so a
+# running deployment rebuilds its data files instead of reusing old ones.
+DATA_VERSION = "2: plain line and category names"
+VERSION_FILE = "version.txt"
+
 
 def data_is_present(data_dir=DATA_DIR):
-    return all(os.path.exists(os.path.join(data_dir, f"{name}.csv")) for name in DATA_FILES)
+    try:
+        with open(os.path.join(data_dir, VERSION_FILE), encoding="utf-8") as f:
+            current = f.read().strip() == DATA_VERSION
+    except OSError:
+        return False
+    return current and all(os.path.exists(os.path.join(data_dir, f"{name}.csv")) for name in DATA_FILES)
 
 
 def generate_all(data_dir=DATA_DIR):
@@ -425,6 +436,8 @@ def generate_all(data_dir=DATA_DIR):
     }
     for name, df in frames.items():
         df.to_csv(os.path.join(data_dir, f"{name}.csv"), index=False)
+    with open(os.path.join(data_dir, VERSION_FILE), "w", encoding="utf-8") as f:
+        f.write(DATA_VERSION)
     return frames
 
 
@@ -436,6 +449,6 @@ if __name__ == "__main__":
 
     _print_target_sheet(sales_df)
     _print_daily_rhythm(sales_df)
-    _print_scenario(sales_df, stock_df, footfall_df, "Womens Knit Top", "Stockout scenario")
-    _print_scenario(sales_df, stock_df, footfall_df, "THM Non Denim Bottom", "Broken size run scenario")
+    _print_scenario(sales_df, stock_df, footfall_df, "Women Tops", "Stockout scenario")
+    _print_scenario(sales_df, stock_df, footfall_df, "Men Casual Trousers", "Broken size run scenario")
     _print_unplanned_stockouts(stock_df)

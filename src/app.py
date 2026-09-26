@@ -11,7 +11,7 @@ Layers:
      Summary, Your data, Guide.
   3. Pop-ups on top of a page: category details and the chat.
 
-The chat and the tour belong to the demo store. With a visitor's own
+The chat and the tour belong to the Sample Store. With a visitor's own
 uploaded data they're switched off: uploaded figures are never sent to an
 AI provider.
 """
@@ -35,7 +35,7 @@ from ui import (
 st.set_page_config(page_title="Category Pulse", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(CSS, unsafe_allow_html=True)
 apply_store_switch()  # before any widget is drawn
-store = current_store()  # builds the simulated data on a fresh deployment, once
+store = current_store()  # builds the Sample Store's data on a fresh deployment, once
 
 PAGES = {
     "Today": st.Page(views.today_page, title="Today", icon=":material/today:", default=True),
@@ -70,7 +70,7 @@ with st.container(horizontal=True, horizontal_alignment="distribute", vertical_a
         if st.session_state.get("my_store") is not None:
             # A fresh key whenever the store changes, so the control always shows the store in use.
             st.segmented_control(
-                "Data", ["Demo", "Your store"], default="Demo" if store.is_demo else "Your store",
+                "Data", ["Sample Store", "Your store"], default="Sample Store" if store.is_demo else "Your store",
                 key=f"store_choice_{int(not store.is_demo)}", on_change=_on_store_choice,
                 label_visibility="collapsed",
             )
@@ -87,7 +87,7 @@ with st.container(horizontal=True, horizontal_alignment="distribute", vertical_a
 tour.render(current_page.title)
 current_page.run()
 
-# --- Floating chat button, demo store only -------------------------------------------------
+# --- Floating chat button, Sample Store only -------------------------------------------------
 # The chat also opens when a category pop-up hands over a question ("Ask the AI
 # about this category"): only one pop-up can be open at a time.
 if store.is_demo:

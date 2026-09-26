@@ -216,8 +216,8 @@ def get_cross_sell_ideas(day=None, hour=None, statuses=("behind",), store=None):
 
 def _print_playbooks(store):
     print("\nTier playbooks: best-responding tier and its offer vary by category\n")
-    for category in ("THM Non Denim Bottom", "THT Woven Top", "Womens Knit Top", "TJM T-shirt",
-                     "BB Knit Top"):
+    for category in ("Men Casual Trousers", "Men Formal Shirts", "Women Tops", "Men Denim T-shirts",
+                     "Boys Tops"):
         p = get_tier_playbook(category, store=store)
         ranked = ", ".join(f"{t['tier']} {t['cross_sell_response_rate_pct']:.0f}%"
                            for t in p["tiers_ranked_by_response"])

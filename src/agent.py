@@ -49,7 +49,7 @@ def build_system_prompt(current_hour, store):
     now = "20:00, closing time" if current_hour == 19 else f"{current_hour + 1}:00"
     return f"""You are Category Pulse, an internal assistant for the manager and sales associates \
 of a single clothing store. You help the floor team act on category performance. You never talk \
-to customers. All data is simulated for this prototype.
+to customers.
 
 Where things stand: it is day {store.today_day} of a {store.days_in_month}-day month, and the time now is \
 {now}. Tools only return data up to now. In tool results, "hour": 16 means the 16:00-17:00 \
@@ -57,12 +57,12 @@ selling hour, so data "as of hour 16" runs to 17:00; when you mention the time, 
 
 How the store is organised:
 - Departments (floor zones): Menswear, Womenswear, Kidswear.
-- Lines: THM = Tommy Hilfiger Menswear, THT = Tailored (formal wear), TJM = Tommy Jeans Men, \
-Womens, and kids lines BB (big boys), BG (big girls), LB (little boys), LG (little girls).
-- A category is "<line> <product type>", e.g. "Womens Knit Top". Everyday names: "chinos" means \
-THM Non Denim Bottom; "jeans" means Denim Bottom (TJM Denim Bottom for men); "formal wear" means \
-the THT line; "polos" means THM Polo; "womenswear" means the Womens line; "kidswear" means \
-BB/BG/LB/LG.
+- Lines: Men Casual, Men Formal, Men Denim, Women, and kids lines Boys and Girls (8-16 years) \
+and Little Boys and Little Girls (2-7 years).
+- A category is "<line> <product type>", e.g. "Women Tops". Everyday names: "chinos" means \
+Men Casual Trousers; "jeans" means Jeans (Men Denim Jeans for men); "formal wear" means \
+the Men Formal line; "polos" means Men Casual Polos; "womenswear" means the Women line; "kidswear" \
+means Boys, Girls, Little Boys and Little Girls.
 - Targets are monthly. Pace is month-to-date: units sold so far vs what the target implies by \
 now. Statuses: behind; drifting (slipping, but could still be normal ups and downs); on_pace; \
 ahead; too_early (too few units expected to judge).
@@ -93,11 +93,11 @@ bullets, no tables, no emoji, no analyst jargon (say "share of visitors who boug
 question or an offer to do more."""
 
 
-def _category(description="Category id, e.g. 'Womens Knit Top'."):
+def _category(description="Category id, e.g. 'Women Tops'."):
     return {"type": "string", "enum": CATEGORIES, "description": description}
 
 
-_LINE = {"type": "string", "enum": list(LINES), "description": "Line code, e.g. 'THM' or 'Womens'."}
+_LINE = {"type": "string", "enum": list(LINES), "description": "Line, e.g. 'Men Casual' or 'Women'."}
 _ZONE = {"type": "string", "enum": DEPARTMENTS, "description": "Floor zone."}
 _HOUR = {"type": "integer", "description": "Store hour slot (10-19). Omit for now."}
 
@@ -318,7 +318,7 @@ def _friendly_api_error(error):
 def _terminal_loop():
     print(f"Category Pulse agent ({PROVIDER['name']}, model {PROVIDER['model']})")
     demo, day, hour = resolve()
-    print(f"Day {day}, simulated time {hour + 1}:00. Type 'quit' to exit.\n")
+    print(f"Day {day}, time {hour + 1}:00. Type 'quit' to exit.\n")
     while True:
         try:
             question = input("You: ").strip()

@@ -14,7 +14,7 @@ TOUR = [
     {
         "page": "Today",
         "title": "The store at a glance",
-        "text": ("This is the store on day 24 of a 31-day May, at the time on the clock button above. The four "
+        "text": ("This is the store today, at the time on the clock button above. The four "
                  "numbers say how the month is going, where it will end if nothing changes (a "
                  "projection), how many categories need action, and how today is going."),
         "highlight": ".cp-kpis",
@@ -23,10 +23,10 @@ TOUR = [
         "page": "Today",
         "title": "What needs action, and why",
         "text": ("Only categories that are genuinely behind are listed, each with its likely cause. "
-                 "Tap the THM Non Denim Bottom card: the pop-up shows why (its core waist sizes are "
+                 "Tap the Men Casual Trousers card: the pop-up shows why (its core waist sizes are "
                  "gone), the stock by size, the shoppers, and what to sell instead. Close it, then "
                  "press Next."),
-        "highlight": '[class*="st-key-click_today_THM_Non_Denim_Bottom"] .cp-row',
+        "highlight": '[class*="st-key-click_today_Men_Casual_Trousers"] .cp-row',
     },
     {
         "page": "Categories",
@@ -76,7 +76,7 @@ PAGES = {}
 
 
 def start():
-    """Start the tour from the first stop, on the demo store (the tour is written for it)."""
+    """Start the tour from the first stop, on the Sample Store (the tour is written for it)."""
     request_store(False)
     st.session_state["tour_step"] = 0
     st.switch_page(PAGES[TOUR[0]["page"]])

@@ -206,7 +206,7 @@ header[data-testid="stHeader"] {{ background: {PAGE}; border-bottom: 1px solid {
 
 # --- The store being looked at, and the chosen time of day ---------------------------
 
-@st.cache_resource(show_spinner="Setting up the simulated store data (first start only)...")
+@st.cache_resource(show_spinner="Setting up the Sample Store (first start only)...")
 def load_data():
     # The demo's data files aren't stored in git: they regenerate identically
     # from the fixed seed, so a fresh deployment builds them on first start.
@@ -273,8 +273,9 @@ def time_label(hour):
 
 
 def today_label():
+    """The day being shown: the date for a store's own data, the weekday for the Sample Store."""
     s = current_store()
-    return s.date(s.today_day).strftime("%a %d %b")
+    return s.date(s.today_day).strftime("%A" if s.is_demo else "%a %d %b")
 
 
 def inr(value):
@@ -436,7 +437,7 @@ def esc(text):
 
 
 def slug(text):
-    """A widget-key-safe version of a name, e.g. 'THM Non Denim Bottom' -> 'THM_Non_Denim_Bottom'."""
+    """A widget-key-safe version of a name, e.g. 'Men Casual Trousers' -> 'Men_Casual_Trousers'."""
     return re.sub(r"[^A-Za-z0-9]+", "_", str(text)).strip("_")
 
 

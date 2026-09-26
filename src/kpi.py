@@ -530,9 +530,9 @@ def _print_conversion(store):
     print("\nTraffic vs conversion: last 3 days + today, compared with the first half of the month\n")
     print(f"{'Subject':<24}{'Visitors vs typical':>21}{'Conversion':>20}{'UPT':>14}   Reading")
     subjects = [
-        {"category": "Womens Knit Top"}, {"zone": "Womenswear"},
-        {"category": "THM Non Denim Bottom"}, {"category": "TJM Denim Bottom"},
-        {"category": "LB Knit Top"}, {"category": "THT Blazer"},
+        {"category": "Women Tops"}, {"zone": "Womenswear"},
+        {"category": "Men Casual Trousers"}, {"category": "Men Denim Jeans"},
+        {"category": "Little Boys Tops"}, {"category": "Men Formal Blazers"},
     ]
     for kwargs in subjects:
         m = get_conversion_metrics(**kwargs, store=store)

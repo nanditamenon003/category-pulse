@@ -2,13 +2,13 @@
 All tunable business rules live here, in one place, so they are easy to
 find and change without hunting through the rest of the codebase.
 
-It also defines the simulated demo store (its lines, categories, targets,
-sizes and calendar). The calculations don't read those directly: they read a
-Store (store.py), so any other store can supply its own.
+It also defines the Sample Store that comes with the app (its lines,
+categories, targets, sizes and calendar). The calculations don't read those
+directly: they read a Store (store.py), so any other store can supply its own.
 
-The store model mirrors how a real Tommy Hilfiger store in India tracks its
-business: monthly unit targets per line and category, reviewed month-to-date.
-All numbers are simulated and illustrative — no real store figures are used.
+The Sample Store works the way a typical fashion store tracks its business:
+monthly unit targets per line and category, reviewed month-to-date. All its
+numbers are simulated and illustrative — no real store figures are used.
 """
 
 import math
@@ -22,9 +22,8 @@ STORE_CLOSE_HOUR = 20
 STORE_HOURS = list(range(STORE_OPEN_HOUR, STORE_CLOSE_HOUR))
 TOTAL_STORE_HOURS = len(STORE_HOURS)
 
-# Shown in the dashboard's top bar. A generic name, because every number in
-# this project is simulated.
-STORE_NAME = "Demo store (simulated data)"
+# Shown in the top bar. The store that comes with the app, for anyone to explore.
+STORE_NAME = "Sample Store"
 
 # --- The simulated month ----------------------------------------------------------
 # Targets are monthly, and the store checks them month-to-date. "Today" is day
@@ -78,59 +77,59 @@ def day_weight(day_info):
     return weight
 
 # --- Store structure: department -> line -> category --------------------------------
-# Mirrors the store's own target sheet. Kidswear is split into Big Boys (BB),
-# Big Girls (BG), Little Boys (LB) and Little Girls (LG).
+# Three floors (departments), each with its lines. Kidswear is split by age:
+# Boys and Girls (8-16 years) and Little Boys and Little Girls (2-7 years).
 LINES = {
-    "THM": "Menswear",      # Tommy Hilfiger Menswear
-    "THT": "Menswear",      # Tommy Hilfiger Tailored
-    "TJM": "Menswear",      # Tommy Jeans Men
-    "Womens": "Womenswear",
-    "BB": "Kidswear",
-    "BG": "Kidswear",
-    "LB": "Kidswear",
-    "LG": "Kidswear",
+    "Men Casual": "Menswear",
+    "Men Formal": "Menswear",
+    "Men Denim": "Menswear",
+    "Women": "Womenswear",
+    "Boys": "Kidswear",
+    "Girls": "Kidswear",
+    "Little Boys": "Kidswear",
+    "Little Girls": "Kidswear",
 }
 DEPARTMENTS = ["Menswear", "Womenswear", "Kidswear"]
 
 # (line, product type, monthly unit target, last year's units, avg selling price in INR)
-# Illustrative, disguised figures: realistic proportions, not real store data.
-# Targets are set from last year plus growth; very small categories get a
-# minimum "floor" target (e.g. Womens Non Denim), which is why a few targets
-# sit far above last year.
+# Illustrative figures: realistic proportions, not real store data. Targets
+# are set from last year plus growth; very small categories get a minimum
+# "floor" target (e.g. Women Trousers), which is why a few targets sit far
+# above last year.
 CATEGORY_PLAN = [
-    ("THM", "Polo", 810, 745, 4700),
-    ("THM", "T-shirt", 95, 84, 3200),
-    ("THM", "Non Denim Bottom", 135, 120, 5900),
-    ("THM", "Woven Top", 425, 392, 5300),
-    ("THT", "Non Denim Bottom", 65, 57, 6700),
-    ("THT", "Blazer", 10, 6, 14500),
-    ("THT", "Woven Top", 370, 344, 6000),
-    ("TJM", "Denim Bottom", 50, 47, 8000),
-    ("TJM", "T-shirt", 75, 71, 2900),
-    ("TJM", "Woven Top", 50, 43, 4900),
-    ("Womens", "Denim Bottom", 15, 6, 6500),
-    ("Womens", "Dress", 50, 41, 6400),
-    ("Womens", "Knit Top", 180, 158, 3000),
-    ("Womens", "Non Denim Bottom", 25, 4, 5200),
-    ("Womens", "Woven Top", 25, 3, 5000),
-    ("BB", "Denim Bottom", 35, 30, 3400),
-    ("BB", "Knit Top", 270, 250, 1900),
-    ("BB", "Non Denim Bottom", 75, 67, 2800),
-    ("BB", "Woven Top", 45, 42, 3200),
-    ("BG", "Dress", 60, 53, 3500),
-    ("BG", "Knit Top", 50, 44, 1900),
-    ("BG", "Non Denim Bottom", 25, 13, 2800),
-    ("LB", "Denim Bottom", 35, 11, 3200),
-    ("LB", "Knit Top", 120, 104, 1800),
-    ("LB", "Non Denim Bottom", 50, 39, 2600),
-    ("LB", "Woven Top", 30, 22, 2900),
-    ("LG", "Dress", 20, 14, 3300),
-    ("LG", "Knit Top", 10, 7, 1800),
-    ("LG", "Non Denim Bottom", 10, 4, 2600),
+    ("Men Casual", "Polos", 810, 745, 4700),
+    ("Men Casual", "T-shirts", 95, 84, 3200),
+    ("Men Casual", "Trousers", 135, 120, 5900),
+    ("Men Casual", "Shirts", 425, 392, 5300),
+    ("Men Formal", "Trousers", 65, 57, 6700),
+    ("Men Formal", "Blazers", 10, 6, 14500),
+    ("Men Formal", "Shirts", 370, 344, 6000),
+    ("Men Denim", "Jeans", 50, 47, 8000),
+    ("Men Denim", "T-shirts", 75, 71, 2900),
+    ("Men Denim", "Shirts", 50, 43, 4900),
+    ("Women", "Jeans", 15, 6, 6500),
+    ("Women", "Dresses", 50, 41, 6400),
+    ("Women", "Tops", 180, 158, 3000),
+    ("Women", "Trousers", 25, 4, 5200),
+    ("Women", "Shirts", 25, 3, 5000),
+    ("Boys", "Jeans", 35, 30, 3400),
+    ("Boys", "Tops", 270, 250, 1900),
+    ("Boys", "Trousers", 75, 67, 2800),
+    ("Boys", "Shirts", 45, 42, 3200),
+    ("Girls", "Dresses", 60, 53, 3500),
+    ("Girls", "Tops", 50, 44, 1900),
+    ("Girls", "Trousers", 25, 13, 2800),
+    ("Little Boys", "Jeans", 35, 11, 3200),
+    ("Little Boys", "Tops", 120, 104, 1800),
+    ("Little Boys", "Trousers", 50, 39, 2600),
+    ("Little Boys", "Shirts", 30, 22, 2900),
+    ("Little Girls", "Dresses", 20, 14, 3300),
+    ("Little Girls", "Tops", 10, 7, 1800),
+    ("Little Girls", "Trousers", 10, 4, 2600),
 ]
 
 # Derived lookups. A category's unique id is "<line> <product type>",
-# e.g. "Womens Knit Top", because product types repeat across lines.
+# e.g. "Women Tops", because product types repeat across lines.
 CATEGORIES = [f"{line} {product}" for line, product, *_ in CATEGORY_PLAN]
 CATEGORY_LINE = {f"{line} {product}": line for line, product, *_ in CATEGORY_PLAN}
 CATEGORY_PRODUCT = {f"{line} {product}": product for line, product, *_ in CATEGORY_PLAN}
@@ -139,6 +138,7 @@ MONTHLY_TARGETS = {f"{l} {p}": target for l, p, target, _, _ in CATEGORY_PLAN}
 LAST_YEAR_UNITS = {f"{l} {p}": ly for l, p, _, ly, _ in CATEGORY_PLAN}
 AVG_PRICE = {f"{l} {p}": price for l, p, _, _, price in CATEGORY_PLAN}
 
+BOTTOMS = ("Trousers", "Jeans")
 # --- Sizes ------------------------------------------------------------------------------
 # Each kind of garment has its own size system. "core" sizes are the ones most
 # customers need: when they run out, the category can't sell to most shoppers
@@ -179,7 +179,7 @@ SIZE_SYSTEMS = {
 
 # For a store whose data doesn't say which sizes are core, they're learned
 # from its sales: the fewest best-selling sizes that together make up at
-# least half of a category's units. (On the demo store's size mixes this
+# least half of a category's units. (On the Sample Store's size mixes this
 # picks exactly the core sizes above, e.g. M and L in men's tops.)
 CORE_SIZE_SALES_SHARE = 0.5
 
@@ -187,12 +187,12 @@ CORE_SIZE_SALES_SHARE = 0.5
 def size_system_for(category):
     """Which size system a category uses, from its line and product type."""
     line = CATEGORY_LINE[category]
-    is_bottom = "Bottom" in CATEGORY_PRODUCT[category]
-    if line in ("BB", "BG"):
+    is_bottom = CATEGORY_PRODUCT[category] in BOTTOMS
+    if line in ("Boys", "Girls"):
         return SIZE_SYSTEMS["big_kids"]
-    if line in ("LB", "LG"):
+    if line in ("Little Boys", "Little Girls"):
         return SIZE_SYSTEMS["little_kids"]
-    if line == "Womens":
+    if line == "Women":
         return SIZE_SYSTEMS["womens_bottoms" if is_bottom else "womens_tops"]
     return SIZE_SYSTEMS["mens_bottoms" if is_bottom else "mens_tops"]
 
@@ -210,58 +210,58 @@ MIN_PAR_PER_SIZE = 4
 # a neighbouring size instead.
 SIZE_SWITCH_RATE = 0.15
 
-# --- Deliberate demo scenarios ---------------------------------------------------------------------
-# The spec's four scenarios, mapped onto real store categories. Stockouts and
-# broken size runs are NOT hard-coded: they emerge from these supply events,
-# because the simulation can only sell what is on the shelf.
+# --- The Sample Store's month: deliberate scenarios ----------------------------------------------
+# Four scenarios. Stockouts and broken size runs are NOT hard-coded: they
+# emerge from these supply events, because the simulation can only sell what
+# is on the shelf.
 
-# Womenswear stockout: Womens Knit Top was allocated tight stock and its
-# Monday delivery on day 18 never arrived. Shoppers keep coming (footfall stays
+# Womenswear stockout: Women Tops was allocated tight stock and its Monday
+# delivery on day 18 never arrived. Shoppers keep coming (footfall stays
 # normal) but there is nothing to sell.
-PAR_WEEKS_OVERRIDE = {"Womens Knit Top": 1.3}
-MISSED_DELIVERIES = {"Womens Knit Top": [18]}
+PAR_WEEKS_OVERRIDE = {"Women Tops": 1.3}
+MISSED_DELIVERIES = {"Women Tops": [18]}
 
-# "Chinos" broken size run: all month the warehouse has been out of the core
-# waists, so every THM Non Denim Bottom delivery arrives without sizes 32 and
+# Broken size run in chinos: all month the warehouse has been out of the core
+# waists, so every Men Casual Trousers delivery arrives without sizes 32 and
 # 34. As often happens, the warehouse ships other waists in their place, so
 # the shelf fills up with 30s and 36s and total stock looks healthy — yet once
 # the opening stock of 32/34 sells through, most shoppers can't find their size.
 SHORT_DELIVERIES = {
-    "THM Non Denim Bottom": {4: ["32", "34"], 11: ["32", "34"], 18: ["32", "34"]}
+    "Men Casual Trousers": {4: ["32", "34"], 11: ["32", "34"], 18: ["32", "34"]}
 }
 
-# Kidswear overperformance: LB Knit Top sells well above plan all month.
+# Kidswear overperformance: Little Boys Tops sells well above plan all month.
 # (Replenishment keeps up, because par is based on its real sell-through.)
-DEMAND_MULTIPLIER = {"LB Knit Top": 1.4}
+DEMAND_MULTIPLIER = {"Little Boys Tops": 1.4}
 
-# "Jeans" (TJM Denim Bottom) and "Formal Wear" (THT Woven Top) have no
-# scenario: they track roughly on pace with normal variation.
+# Men Denim Jeans and Men Formal Shirts have no scenario: they track roughly
+# on pace with normal variation.
 
 # --- Cross-selling (Phase 6c) ------------------------------------------------------
 # Which product types go together as an outfit (to pair a lagging category
 # with), and which can stand in for each other when one is sold out.
-# Adults can pair across lines on the same floor (e.g. THM chinos with a THT
-# shirt); kids pair only within the same line, since BB/BG/LB/LG are
-# different ages.
+# Adults can pair across lines on the same floor (e.g. casual chinos with a
+# formal shirt); kids pair only within the same line, since the kids' lines
+# are different ages.
 COMPLEMENTS = {
-    "Non Denim Bottom": ["Woven Top", "Polo", "Knit Top", "Blazer"],
-    "Denim Bottom": ["T-shirt", "Knit Top", "Woven Top", "Polo"],
-    "Polo": ["Non Denim Bottom", "Denim Bottom"],
-    "T-shirt": ["Denim Bottom", "Non Denim Bottom"],
-    "Woven Top": ["Non Denim Bottom", "Blazer", "Denim Bottom"],
-    "Blazer": ["Woven Top", "Non Denim Bottom"],
-    "Knit Top": ["Denim Bottom", "Non Denim Bottom"],
-    "Dress": ["Woven Top", "Knit Top"],
+    "Trousers": ["Shirts", "Polos", "Tops", "Blazers"],
+    "Jeans": ["T-shirts", "Tops", "Shirts", "Polos"],
+    "Polos": ["Trousers", "Jeans"],
+    "T-shirts": ["Jeans", "Trousers"],
+    "Shirts": ["Trousers", "Blazers", "Jeans"],
+    "Blazers": ["Shirts", "Trousers"],
+    "Tops": ["Jeans", "Trousers"],
+    "Dresses": ["Shirts", "Tops"],
 }
 SUBSTITUTES = {
-    "Knit Top": ["Woven Top", "T-shirt", "Polo"],
-    "Woven Top": ["Knit Top", "Polo"],
-    "Polo": ["T-shirt", "Knit Top", "Woven Top"],
-    "T-shirt": ["Polo", "Knit Top"],
-    "Non Denim Bottom": ["Denim Bottom"],
-    "Denim Bottom": ["Non Denim Bottom"],
-    "Dress": ["Woven Top", "Knit Top"],
-    "Blazer": ["Woven Top"],
+    "Tops": ["Shirts", "T-shirts", "Polos"],
+    "Shirts": ["Tops", "Polos"],
+    "Polos": ["T-shirts", "Tops", "Shirts"],
+    "T-shirts": ["Polos", "Tops"],
+    "Trousers": ["Jeans"],
+    "Jeans": ["Trousers"],
+    "Dresses": ["Shirts", "Tops"],
+    "Blazers": ["Shirts"],
 }
 
 # --- Reproducibility ---------------------------------------------------------------
