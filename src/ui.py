@@ -8,7 +8,9 @@ status (green on track, amber drifting, red behind) plus one indigo accent
 for interactive elements; one typeface (Inter); no shadows or gradients.
 """
 
+import hashlib
 import html
+import pathlib
 import re
 
 import pandas as pd
@@ -362,21 +364,27 @@ LOOKUPS = {
 }
 
 
+# A fingerprint of the app's code, part of every cache key: after an update,
+# results worked out by the previous version are never shown again.
+CODE_VERSION = hashlib.sha1(b"".join(
+    p.read_bytes() for p in sorted(pathlib.Path(__file__).parent.glob("*.py")))).hexdigest()[:12]
+
+
 # Results are kept for an hour at most, so an uploaded store's figures don't
 # linger in the app's memory.
 @st.cache_data(show_spinner=False, ttl="1h")
-def _lookup(store_id, name, args, _store):
+def _lookup(store_id, code_version, name, args, _store):
     return LOOKUPS[name](_store, *args)
 
 
 @st.cache_data(show_spinner="Working it out...", ttl="1h")
-def _slow_lookup(store_id, name, args, _store):
+def _slow_lookup(store_id, code_version, name, args, _store):
     return LOOKUPS[name](_store, *args)
 
 
 def _get(name, *args, slow=False):
     s = current_store()
-    return (_slow_lookup if slow else _lookup)(s.id, name, args, s)
+    return (_slow_lookup if slow else _lookup)(s.id, CODE_VERSION, name, args, s)
 
 
 def pace_at(hour):
