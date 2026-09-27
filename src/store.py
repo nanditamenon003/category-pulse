@@ -230,9 +230,9 @@ class Store:
     def stock_lookup(self):
         """(category, day, hour) -> {size: units left}, for quick repeated lookups."""
         lookup = {}
-        for (category, day, hour), rows in self.stock.groupby(["category", "day", "hour"]):
-            lookup[(category, int(day), int(hour))] = dict(
-                zip(rows["size"], rows["units_remaining"].astype(int)))
+        rows = self.stock[["category", "day", "hour", "size", "units_remaining"]]
+        for category, day, hour, size, units in rows.itertuples(index=False):
+            lookup.setdefault((category, int(day), int(hour)), {})[size] = int(units)
         return lookup
 
     @functools.cached_property

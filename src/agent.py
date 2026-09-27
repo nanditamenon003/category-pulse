@@ -23,8 +23,10 @@ import os
 
 from dotenv import load_dotenv
 
+import forecast
 import kpi
 import loyalty
+import plan
 import staffing
 import stock
 from config import AI_MAX_TOKENS, AI_PROVIDER, AI_PROVIDERS, MAX_TOOL_ITERATIONS
@@ -131,6 +133,7 @@ TOOL_NEEDS = {
     "get_stock_health_report": ("stock",), "check_size_runs": ("stock",),
     "get_stock_status": ("stock",), "get_stock_history": ("stock",),
     "get_last_piece_alerts": ("stock",), "get_days_of_cover": ("stock",),
+    "get_request_quantities": ("stock",),
     "get_footfall": ("footfall",), "get_conversion_metrics": ("footfall", "transactions"),
     "get_staffing_recommendation": ("visitor_hours",), "get_tier_playbook": ("loyalty",),
 }
@@ -183,6 +186,22 @@ def build_tools(store):
               "Projection of how many days each size of a category will last at its recent selling "
               "rate, and which are likely to run out before the next delivery.",
               {"category": category()}, ["category"]),
+        _tool("get_request_quantities",
+              "How many of each size to request (from the warehouse or a nearby store) so the shelf "
+              "lasts until the delivery after next, most urgent first (core sizes sold out, then sizes "
+              "that won't last to the next delivery). A projection from each size's in-stock selling "
+              "rate. Use for 'what should I order?' or 'what do we need?'."),
+        _tool("get_month_end_range",
+              "Where the month is likely to finish for the whole store (no arguments), a line or a "
+              "category: likely, low and high (the middle 80% of outcomes), and the chance of "
+              "reaching the target (or last year, see 'yardstick'). A projection. Use for 'will we "
+              "hit target?' or 'where will we end up?'.",
+              {"category": category(), "line": line}),
+        _tool("get_tomorrow_plan",
+              "Tomorrow's plan for the morning huddle, from today's close: what tomorrow needs to "
+              "sell to stay on course, what a usual day like it brings, the categories to focus on "
+              "with the action and till tip for each, urgent stock requests, busy hours and floor "
+              "split (when the data has them), and what's going well."),
         _tool("get_footfall",
               "Visitors to a floor zone today so far vs a typical day of the same kind, plus the "
               "last 7 days. Give a zone, or a category or line to use its zone.",
@@ -208,6 +227,21 @@ def build_tools(store):
     return [t for t in tools
             if all(getattr(store, f"has_{need}") for need in TOOL_NEEDS.get(t["name"], ()))]
 
+def _requests_for_agent(r):
+    """Urgent requests size by size; the routine top-up as one total per category (keeps it short)."""
+    urgent = [c for c in r["categories"] if c["core_sizes_out"] or c["urgent_sizes"]]
+    routine = [{"category": c["category"], "total_units": c["total"]}
+               for c in r["categories"] if c not in urgent]
+    return {k: v for k, v in r.items() if k != "categories"} | {"urgent": urgent, "routine_top_up": routine}
+
+
+def _plan_for_agent(p):
+    """The plan without the full top-up list (the request tool has it), to keep the answer short."""
+    if p.get("stock"):
+        p = p | {"stock": {k: v for k, v in p["stock"].items() if k != "all"}}
+    return p
+
+
 def _build_tool_dispatch(current_hour, store):
     """
     Maps tool names to functions. Every tool works on the store's today and
@@ -230,6 +264,10 @@ def _build_tool_dispatch(current_hour, store):
         "get_stock_history": lambda category: stock.get_stock_history(category, day, now, store=s),
         "get_last_piece_alerts": lambda: stock.get_last_piece_alerts(day, now, store=s),
         "get_days_of_cover": lambda category: stock.get_days_of_cover(category, day, now, store=s),
+        "get_request_quantities": lambda: _requests_for_agent(stock.get_request_quantities(day, now, store=s)),
+        "get_month_end_range": lambda category=None, line=None:
+            forecast.get_month_end_range(category=category, line=line, day=day, hour=now, store=s),
+        "get_tomorrow_plan": lambda: _plan_for_agent(plan.get_plan(store=s)),
         "get_footfall": lambda zone=None, category=None, line=None, hour=None:
             kpi.get_footfall(zone=zone, category=category, line=line, day=day, hour=at(hour), store=s),
         "get_conversion_metrics": lambda category=None, line=None, zone=None:

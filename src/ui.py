@@ -18,8 +18,10 @@ import streamlit as st
 
 import diagnosis
 import digest
+import forecast
 import kpi
 import loyalty
+import plan
 import staffing
 import stock
 from store import demo_store
@@ -407,6 +409,11 @@ LOOKUPS = {
     "zones": _zones,
     "staffing": _staffing,
     "category_detail": _category_detail,
+    "month_end": lambda s, category, hour: forecast.get_month_end_range(category=category, hour=hour, store=s),
+    "requests": lambda s, hour: stock.get_request_quantities(hour=hour, store=s),
+    "plan": lambda s: plan.get_plan(store=s),
+    "plan_message": lambda s: plan.plan_message(plan.get_plan(store=s), s),
+    "whatsapp": lambda s: digest.whatsapp_report(store=s),
 }
 
 
@@ -484,6 +491,27 @@ def staffing_for(day):
 
 def category_detail_at(category, hour):
     return _get("category_detail", category, hour, slow=True)
+
+
+def month_end_at(hour, category=None):
+    """Where the month (or one category) is likely to finish: a range, and the chance of target."""
+    return _get("month_end", category, hour)
+
+
+def requests_at(hour):
+    return _get("requests", hour, slow=True)
+
+
+def tomorrow_plan():
+    return _get("plan", slow=True)
+
+
+def plan_message_text():
+    return _get("plan_message", slow=True)
+
+
+def whatsapp_report_text():
+    return _get("whatsapp", slow=True)
 
 # --- Small HTML builders -------------------------------------------------------------
 

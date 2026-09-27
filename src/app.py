@@ -9,8 +9,8 @@ Layers:
   1. The frame (this file): name, which store's data is showing, a Units / ₹
      switch, time button, account menu, top menu, the guided tour card, and a
      floating "Ask Category Pulse" button.
-  2. Pages (views.py): Today, Categories, Stock, Floor and staff, Sell,
-     Summary, Your data, Guide.
+  2. Pages (views.py): Today, Plan (tomorrow's), Categories, Stock, Floor and
+     staff, Sell, Summary, Your data, Guide.
   3. Pop-ups on top of a page: the welcome guide, category details and the chat.
 
 What the pages show:
@@ -48,6 +48,7 @@ store = prepare_session()  # before any widget is drawn
 
 PAGES = {
     "Today": st.Page(views.today_page, title="Today", icon=":material/today:", default=True),
+    "Plan": st.Page(views.plan_page, title="Plan", icon=":material/checklist:", url_path="plan"),
     "Categories": st.Page(views.categories_page, title="Categories", icon=":material/grid_view:",
                           url_path="categories"),
     "Stock": st.Page(views.stock_page, title="Stock", icon=":material/inventory_2:", url_path="stock"),

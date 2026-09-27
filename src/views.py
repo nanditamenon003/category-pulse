@@ -9,6 +9,7 @@ category detail and the chat. Only one pop-up can be open at a time, so
 
 import hashlib
 import json
+import urllib.parse
 import uuid
 
 import altair as alt
@@ -23,6 +24,7 @@ import tour
 import upload
 import usage
 from config import QUESTIONS_PER_DAY
+from forecast import CHANCE_PHRASE, GOAL_PHRASE, chance_words
 from store import WEEKDAY_NAMES, StoreDataError
 from ui import (
     AMBER,
@@ -51,11 +53,14 @@ from ui import (
     html_block,
     kpi_card,
     last_pieces_at,
+    month_end_at,
+    plan_message_text,
     line_card,
     pace_at,
     page_title,
     pill,
     playbook_for,
+    requests_at,
     progress_bar,
     request_forget,
     risky_sizes_at,
@@ -64,6 +69,8 @@ from ui import (
     stock_health_at,
     time_label,
     today_at,
+    tomorrow_plan,
+    whatsapp_report_text,
     yardstick,
     zones_at,
 )
@@ -230,6 +237,34 @@ def _problem_row(p, diag):
     )
 
 
+def _range_text(me, a):
+    """'likely 3,150 to 3,230 · 20% chance of target' from a month-end range (or a plain note)."""
+    if me["likely"] is None:
+        return "too early for a range"
+    text = f"likely {a(me['low'])} to {a(me['high'])}"
+    if me["chance_of_target_pct"] is not None:
+        text += f" · {me['chance_of_target_pct']}% {CHANCE_PHRASE[me['yardstick']]}"
+    return text
+
+
+def _share_block(message, key):
+    """A message ready to copy (the copy button is top right), and a button to share it on WhatsApp."""
+    st.code(message, language=None, wrap_lines=True)
+    st.link_button("Share on WhatsApp", "https://wa.me/?text=" + urllib.parse.quote(message),
+                   icon=":material/share:")
+
+
+def _request_table(categories):
+    return pd.DataFrame([
+        {"Category": c["category"], "Size": r["size"], "On hand": r["units_on_hand"],
+         "Sells per day": r["avg_per_day_when_in_stock"], "Request": r["request"],
+         "Why": ("core size, sold out" if r["out_now"] and r["is_core_size"] else
+                 "sold out" if r["out_now"] else
+                 "won't last to the next delivery" if r["urgent"] else "top up")}
+        for c in categories for r in c["sizes"]
+    ])
+
+
 def _yardstick_note(p):
     """'(last year) ' when a category isn't measured against its own target; '' when it is."""
     return "" if p.get("target_source") in (None, "target") else f"({yardstick(p)}) "
@@ -298,8 +333,12 @@ def today_page():
         month_cards = (kpi_card("Month so far", a(sold), f"of about {a(expected)} expected by now")
                        + kpi_card("Month result", a(sold), f"of the {a(target)} target"))
     else:
+        me = month_end_at(hour)
+        sub = _range_text(me, a) if me["likely"] is not None else f"target {a(target)} (a projection)"
+        if me["chance_of_target_pct"] is None and me["likely"] is not None:
+            sub += f" · target {a(target)}"
         month_cards = (kpi_card("Month so far", a(sold), f"of about {a(expected)} expected by now")
-                       + kpi_card("Month-end at this rate", a(projected), f"target {a(target)} (a projection)"))
+                       + kpi_card("Month-end at this rate", a(projected), sub))
     html_block('<div class="cp-kpis">'
                + month_cards
                + kpi_card("Need action", f"{len(behind)} behind", f"{len(drifting)} drifting",
@@ -308,6 +347,10 @@ def today_page():
                   if lines_judged else
                   kpi_card("Today so far", a(sum(t["units_sold_today"] for t in lines_today)), ""))
                + "</div>")
+
+    if s.today_day < s.days_in_month:
+        st.page_link(tour.PAGES["Plan"], label=f"Plan for {WEEKDAY_NAMES[s.weekday(s.today_day + 1)]} is "
+                     f"ready: focus, stock to request, busy hours", icon=":material/checklist:")
 
     html_block(heading("Needs action now", "tap a category for the full picture"))
     if not behind:
@@ -402,9 +445,12 @@ def _why_tab(p, diag):
                       if p["month_finished"] else
                       kpi_card("Month-end at this rate",
                                a(p["projected_month_end_if_current_rate_continues"]),
-                               "a projection, not a result"))
+                               _range_text(me, a) if (me := month_end_at(p["as_of"]["hour"], p["category"]))
+                               else "a projection, not a result"))
                    + "</div>"
                    + progress_bar(p["units_sold_so_far"], p["monthly_target"], p["expected_units_by_now"]))
+        if not p["month_finished"] and me.get("caution"):
+            html_block(f'<div class="cp-small">{esc(me["caution"])}</div>')
 
     if p["status"] in ("behind", "drifting"):
         html_block(heading("The evidence"))
@@ -746,6 +792,25 @@ def stock_page():
                      f"Open {r['category']}"):
             category_dialog(r["category"])
 
+    requests = requests_at(hour)
+    html_block(heading("What to request", requests["basis"]))
+    urgent = [c for c in requests["categories"] if c["core_sizes_out"] or c["urgent_sizes"]]
+    if not requests["categories"]:
+        html_block('<div class="cp-panel"><p>Every size has enough stock for now.</p></div>')
+    else:
+        if urgent:
+            html_block('<div class="cp-small">Most urgent first: core sizes already sold out, then sizes '
+                       'that won\'t last until the next delivery (those need a transfer from a nearby '
+                       'store, not just an order).</div>')
+            st.dataframe(_request_table(urgent), hide_index=True, width="stretch")
+        with st.expander(f"Everything to top up ({len(requests['categories'])} categories)"):
+            everything = _request_table(requests["categories"])
+            st.dataframe(everything, hide_index=True, width="stretch")
+            st.download_button("Download the request (CSV)", data=everything.to_csv(index=False),
+                               file_name=f"category-pulse-request-day{s.today_day}.csv", mime="text/csv",
+                               icon=":material/download:")
+        html_block(f'<div class="cp-small">{esc(requests["note"])}</div>')
+
     html_block(heading("Last pieces today", "in the order they happened"))
     if not pieces:
         html_block('<div class="cp-panel"><p>No size has dropped to its last piece today.</p></div>')
@@ -944,6 +1009,104 @@ def sell_page():
         st.dataframe(pd.DataFrame(best), hide_index=True, width="stretch")
 
 
+def plan_page():
+    if _no_data("Plan", "Tomorrow's plan will show here",
+                "What tomorrow needs to sell, which categories to focus on and what to do about each, "
+                "stock to request, and where to put the team, ready to share with the team."):
+        return
+    s = current_store()
+    p = tomorrow_plan()
+    if p["month_over"]:
+        page_title("Plan")
+        html_block('<div class="cp-panel"><p>The month is over. Upload next month\'s sales to plan the '
+                   'days ahead.</p></div>')
+        return
+    a = s.amount
+    date = s.date(p["for_day"])
+    page_title(f"Plan for {p['weekday']} {date:%d %b}",
+               f"For the morning huddle, from the figures at the close of day {p['made_at']['day']}. "
+               f"Share it with the team at the bottom of the page.")
+
+    goal, me = p["goal"], p["month_end"]
+    cards = []
+    if goal:
+        cards.append(kpi_card("Tomorrow needs", a(goal["needs"]) if goal["needs"] > 0 else "Target reached",
+                              GOAL_PHRASE[goal["yardstick"]].replace("keeps", "to keep", 1)
+                              if goal["needs"] > 0 else "keep going",
+                              tone="red" if goal["needs"] > 1.15 * goal["usual_at_current_rate"] else ""))
+        cards.append(kpi_card(f"A usual {p['weekday']}", a(goal["usual_at_current_rate"]),
+                              "at this month's current rate" + (" (a busy day)" if p["busy_day"] else "")))
+    else:
+        cards.append(kpi_card("Tomorrow needs", "-", "no targets to judge by yet"))
+    if me["likely"] is not None:
+        chance = me["chance_of_target_pct"]
+        cards.append(kpi_card("Month-end", f"{a(me['low'])} to {a(me['high'])}",
+                              f"{chance}% {CHANCE_PHRASE[me['yardstick']]} ({chance_words(chance)})" if chance is not None
+                              else "likely range (a projection)"))
+    cards.append(kpi_card("To focus on", f"{len(p['focus'])}",
+                          f"{'category' if len(p['focus']) == 1 else 'categories'} behind or slipping",
+                          tone="red" if any(f["status"] == "behind" for f in p["focus"]) else ""))
+    html_block('<div class="cp-kpis">' + "".join(cards) + "</div>")
+    if len(p["goal_by_line"]) > 1:
+        with st.expander("Tomorrow's goal by line"):
+            st.dataframe(pd.DataFrame([
+                {"Line": g["line"], "Tomorrow needs": a(g["needs"]),
+                 f"A usual {p['weekday']}": a(g["usual_at_current_rate"])}
+                for g in p["goal_by_line"]]), hide_index=True, width="stretch")
+
+    html_block(heading("Focus", "tap a category for the full picture"))
+    if not p["focus"]:
+        html_block('<div class="cp-panel"><p>Nothing is behind or slipping. Keep the floor stocked and '
+                   'the best sellers visible.</p></div>')
+    for f in p["focus"]:
+        tone = STATUS[f["status"]][1]
+        till = f'<div class="cp-row-text"><b>At the till:</b> {esc(f["at_the_till"])}</div>' \
+            if f["at_the_till"] else ""
+        markup = (f'<div class="cp-row {tone}"><div style="flex:1;min-width:0">{pill(f["status"])}'
+                  + (cause_chip(f["cause"]) if f["status"] == "behind" else "")
+                  + f'<div class="cp-row-name">{esc(f["category"])} '
+                  f'<span class="cp-small">{f["pct_vs_pace"]:+.0f}% vs pace</span></div>'
+                  f'<div class="cp-row-text"><b>Do:</b> {esc(f["action"])}</div>{till}'
+                  f'</div><div class="cp-chev">&rsaquo;</div></div>')
+        if clickable(f"plan_{slug(f['category'])}", markup, f"Open {f['category']}"):
+            category_dialog(f["category"])
+    if p["more_behind"]:
+        html_block(f'<div class="cp-small">{p["more_behind"]} more behind: see Categories.</div>')
+
+    html_block(heading("Stock to request today"))
+    if p["stock"] is None:
+        _not_in_data("stock counts", "upload a stock report with units on hand by category and size")
+    elif not p["stock"]["urgent"]:
+        html_block('<div class="cp-panel"><p>Nothing urgent: no core size is sold out and every size should '
+                   'last until the next delivery. The Stock page has the usual top-up.</p></div>')
+    else:
+        html_block(f'<div class="cp-small">{esc(p["stock"]["basis"][0].upper() + p["stock"]["basis"][1:])}. '
+                   f'Most urgent first.</div>')
+        st.dataframe(_request_table(p["stock"]["urgent"]), hide_index=True, width="stretch")
+
+    html_block(heading("The floor team", "tomorrow's busy hours"))
+    people = p["people"]
+    if people is None:
+        _not_in_data("visitors by hour, needed for tomorrow's busy hours", "upload visitor counts by hour")
+    else:
+        split = ", ".join(f"{zone} {pct}%" for zone, pct in people["suggested_floor_split_at_busiest_hour_pct"].items())
+        html_block('<div class="cp-panel">'
+                   + "".join(f'<p><b>{esc(z["zone"])}:</b> busiest {esc(", ".join(z["peak_windows"]) or "no clear peak")}'
+                             f'{" · " + esc(z["reliability"]) if z["reliability"] != "good" else ""}</p>'
+                             for z in people["zones"])
+                   + f'<p>At {people["store_busiest_hour"]}:00, the store\'s busiest hour, split the team: '
+                     f'{esc(split)}.</p>'
+                   + "".join(f'<p class="cp-small">{esc(n)}</p>' for n in people["notes"])
+                   + "</div>")
+
+    if p["going_well"]:
+        html_block(heading("Going well") + f'<div class="cp-panel"><p>{esc(", ".join(p["going_well"]))}: '
+                   f'keep them stocked and on display.</p></div>')
+
+    html_block(heading("Share with the team", "for the huddle or the team's WhatsApp group"))
+    _share_block(plan_message_text(), "plan")
+
+
 def summary_page():
     if _no_data("Summary", "Your end-of-day summary will show here",
                 "A short plain-English summary of the day, and the month's contribution report, "
@@ -957,6 +1120,12 @@ def summary_page():
                "The plain-English summary that replaces the evening spreadsheet, and the month's "
                "contribution report.")
 
+    html_block(heading("Evening report for WhatsApp", f"at the close of day {s.today_day}")
+               + '<div class="cp-small" style="margin:0 0 6px">Short enough to read on a phone. Copy it '
+                 '(top right of the box) or share it straight to your area manager or the team.</div>')
+    _share_block(whatsapp_report_text(), "evening")
+
+    html_block(heading("The full summary"))
     text = digest_at(hour)
     html_block('<div class="cp-digest">'
                + "".join(f"<p>{esc(p)}</p>" for p in text.split("\n\n")) + "</div>")
@@ -1413,6 +1582,16 @@ GUIDE_TERMS = [
     ("Month-end at this rate", "A projection, not a result: where the month lands if the rest of it "
                                "keeps the same pace against plan. It can't know about stockouts or "
                                "a month-end push."),
+    ("Month-end range", "Where the month is likely to finish, as a range roughly 8 months in 10 like "
+                        "this would land inside, and the chance of reaching the target. Worked out from "
+                        "the pace so far and how much this store's daily sales usually vary. A "
+                        "projection: it can't know about a stockout next week."),
+    ("Tomorrow's plan", "What tomorrow needs to sell to keep the month on course for its target (the "
+                        "gap left, shared over the remaining days by how busy each is), the categories "
+                        "to focus on and what to do, stock to request, and busy hours."),
+    ("What to request", "For each size: enough to last until the delivery after next at the rate it "
+                        "sells when it's on the shelf, minus what's on hand. Core sizes get a margin "
+                        "for a busy week."),
     ("Core sizes", "The sizes most shoppers need, such as M and L in men's tops or waists 32 and "
                    "34 in men's bottoms."),
     ("Stockout", "Almost nothing left to sell in any size."),

@@ -14,12 +14,13 @@
 
 | Section | What it's for |
 |---|---|
-| **Today** | The home screen: four headline numbers, what needs action now and why, and a "Start here" guide for first-time visitors |
+| **Today** | The home screen: four headline numbers (with the likely month-end range), what needs action now and why, and a "Start here" guide for first-time visitors |
+| **Plan** | Tomorrow's plan for the morning huddle: what tomorrow needs to sell, the categories to focus on and what to do, stock to request, busy hours and floor split, ready to share on WhatsApp |
 | **Categories** | All 29 categories as cards, a table or a chart, with filters. Tap any one for its detail |
-| **Stock** | Stockouts, broken size runs, today's last-piece alerts, and sizes likely to run out before the next delivery |
+| **Stock** | Stockouts, broken size runs, what to request per size (downloadable), today's last-piece alerts, and sizes likely to run out before the next delivery |
 | **Floor and staff** | Visitors and buyers per floor zone, and tomorrow's peak hours and floor split |
 | **Sell** | Cross-sell scripts for the till, and what each loyalty tier responds to |
-| **Summary** | The end-of-day summary and the month's contribution report, both downloadable |
+| **Summary** | The evening report as a short WhatsApp message (copy or share), the full end-of-day summary, and the month's contribution report |
 | **Your data** | Upload your sales as your till system exports them (plus stock, targets or visitor counts if you have them), check how each column was read, then see what it switches on before every page shows your numbers |
 | **Guide** | What each status and term means in plain English, how the AI chat works, and a button to start the tour |
 
@@ -55,7 +56,10 @@ Category Pulse is a layer on top of the store's existing system, not a replaceme
 | **Diagnosis** | For each struggling category: stockout, broken size run, fewer visitors (traffic), or fewer buyers (conversion), with the evidence and one concrete action. |
 | **Cross-sell ideas** | Triggered only by real pace deficits, and adapted to the cause (a substitute for a sold-out category, a pairing for the sizes in stock). Targeted by loyalty tier, with the offer that tier responds to. |
 | **Staffing** | Tomorrow's peak hours per floor zone, learned from past days of the same kind (weekday vs weekend). |
-| **End-of-day summary** | A short plain-English summary to replace the evening spreadsheet: where the month stands, what's behind and why, what to do tomorrow. |
+| **Month-end range** | Instead of one projected number, a range (the middle 80% of outcomes) and the chance of reaching target, from the pace so far and how much the store's daily sales usually vary. Tested on thousands of simulated months: about 8 in 10 finish inside it. |
+| **What to request** | For each size: enough to last until the delivery after next at the rate it sells when it's on the shelf, with a margin on core sizes. Sold-out core sizes and sizes that won't last to the next delivery come first. |
+| **Tomorrow's plan** | The morning huddle on one page: tomorrow's goal (and what a usual day like it brings), focus categories with the action and till tip for each, urgent stock requests, busy hours. Ready to share on WhatsApp. |
+| **End-of-day summary** | A short plain-English summary to replace the evening spreadsheet: where the month stands, what's behind and why, what to do tomorrow. Also as a WhatsApp-ready message for the area manager. |
 | **AI chat** | Ask anything ("why is womenswear behind — traffic or conversion?"). The AI answers by calling the same tools, and a **"How I got this"** panel shows every lookup and number it used. |
 | **Your own data** | Upload your store's own exports, in whatever shape they come, and every page switches to your store. Pace can be judged in units or rupees (a switch at the top). See below. |
 
@@ -140,7 +144,7 @@ The chat code is the same for both: DeepSeek offers an Anthropic-compatible endp
 
 Each module can also be run on its own and prints its own checks, e.g. `python src/kpi.py` (pace table and contribution report), `python src/stock.py`, `python src/digest.py` (end-of-day summary), or `python src/agent.py` (terminal chat).
 
-`python tests/test_upload.py` checks that the sample file reads back exactly as the Sample Store, that loosely named CSV files work, and that broken files are refused with a plain message. `python tests/test_smart_import.py` reads a raw bill-level till export (report title, date and time in one cell, customer columns, a Grand Total row, last month and last year mixed in) with no help, and checks floor targets in rupees, a typed store target, that saved data reads back the same, and that changed column choices are remembered. `python tests/test_any_store.py` runs the whole engine on a made-up store that looks nothing like the Sample Store (different lines, month and opening hours, stock counted once a day), and on a bare version with only daily sales totals. It checks that planted problems are found and that missing data is reported plainly, not guessed.
+`python tests/test_upload.py` checks that the sample file reads back exactly as the Sample Store, that loosely named CSV files work, and that broken files are refused with a plain message. `python tests/test_plan.py` checks that the month-end range is honest (on thousands of simulated months, about 8 in 10 finish inside it), that the Sample Store's sold-out and broken-size categories come first in the plan and the stock request, and that a bare store gets a plan that says less rather than guessing. `python tests/test_smart_import.py` reads a raw bill-level till export (report title, date and time in one cell, customer columns, a Grand Total row, last month and last year mixed in) with no help, and checks floor targets in rupees, a typed store target, that saved data reads back the same, and that changed column choices are remembered. `python tests/test_any_store.py` runs the whole engine on a made-up store that looks nothing like the Sample Store (different lines, month and opening hours, stock counted once a day), and on a bare version with only daily sales totals. It checks that planted problems are found and that missing data is reported plainly, not guessed.
 
 ### Deploying (Streamlit Community Cloud, free)
 
@@ -163,7 +167,9 @@ category-pulse/
 │   ├── staffing.py       peak hours per floor zone and tomorrow's floor cover
 │   ├── loyalty.py        loyalty tier playbooks and cause-aware cross-sell ideas
 │   ├── diagnosis.py      "why is it behind?": one likely cause, the evidence, one action
-│   ├── digest.py         the plain-English end-of-day summary
+│   ├── digest.py         the plain-English end-of-day summary, and the WhatsApp evening report
+│   ├── forecast.py       the month-end range and the chance of reaching target
+│   ├── plan.py           tomorrow's plan for the morning huddle
 │   ├── agent.py          the AI chat: tools, instructions, and the tool-calling loop
 │   ├── app.py            the web app's frame: top menu, time and account buttons, chat button
 │   ├── account.py        the welcome page, sign-in with Auth0, log out, and guest mode
@@ -176,6 +182,7 @@ category-pulse/
 │   ├── test_any_store.py runs the engine on a different, made-up store
 │   ├── test_upload.py    the upload path: sample round trip, CSV files, refusals
 │   ├── test_smart_import.py  raw till exports, flexible targets, remembered column choices
+│   ├── test_plan.py      the month-end range is honest; requests, tomorrow's plan, WhatsApp report
 │   └── test_storage.py   saving to accounts: scrambled at rest, owner-only, delete
 ├── .streamlit/config.toml  theme (colours, hidden menus)
 ├── data/                   generated data (not stored in git; rebuilt from the seed)

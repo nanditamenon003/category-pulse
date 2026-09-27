@@ -343,6 +343,17 @@ STOCKOUT_MAX_SHARE = 0.10
 BROKEN_RUN_MIN_SHARE = 0.30
 CORE_DEPLETED_MAX_UNITS = 1
 
+# What to request per size (Step 3). A request made today arrives with the
+# next delivery and has to last until the one after, so it covers the days
+# to the next delivery plus one delivery cycle. Stores without a fixed
+# delivery day get REQUEST_DAYS_WITHOUT_SCHEDULE days of selling instead.
+# Core sizes get a safety margin: enough for about 9 cycles in 10 (1.28
+# standard deviations of normal day-to-day ups and downs); other sizes don't,
+# because running short of an edge size costs little.
+DELIVERY_CYCLE_DAYS = 7
+REQUEST_DAYS_WITHOUT_SCHEDULE = 10
+REQUEST_SAFETY_Z = 1.28
+
 # --- AI agent (Phase 4) -----------------------------------------------------------------
 # Which AI provider the chat uses: change this one line to switch. The agent
 # is written against Anthropic's Messages API; DeepSeek offers an

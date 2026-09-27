@@ -185,7 +185,83 @@ def generate_digest(day=None, hour=None, store=None):
     return "\n\n".join(p for p in paragraphs if p)
 
 
+# The cause in two or three words, for the WhatsApp report.
+SHORT_CAUSE = {
+    "stockout": "sold out",
+    "broken_size_run": "core sizes gone",
+    "traffic_drop": "fewer visitors",
+    "conversion_drop": "fewer buyers",
+    "unclear": "no clear cause yet",
+}
+
+
+def whatsapp_report(day=None, store=None):
+    """
+    The evening report as a short message for the area manager or the team's
+    WhatsApp group, at the close of `day` (default: the store's latest day).
+    WhatsApp shows *text* in bold. Every figure comes from the same functions
+    as the rest of the app.
+    """
+    import forecast
+    import plan
+
+    store, day, _ = resolve(store, day)
+    close = store.hours[-1]
+    date = store.date(day)
+    a = store.amount
+    pace = kpi.get_category_pace(day, close, store=store)
+    judged = [p for p in pace if p["monthly_target"]]
+    lines = [f"*{store.name}: close of {WEEKDAY_NAMES[date.weekday()][:3]} {date:%d %b}* "
+             f"(day {day} of {store.days_in_month})"]
+
+    if judged:
+        sold = sum(p["units_sold_so_far"] for p in judged)
+        expected = sum(p["expected_units_by_now"] for p in judged)
+        target = sum(p["monthly_target"] for p in judged)
+        pct = (sold - expected) / expected * 100 if expected else 0
+        standing = "right on pace" if abs(pct) < 3 else f"{abs(pct):.0f}% {'ahead of' if pct > 0 else 'behind'} pace"
+        lines.append(f"*Month:* {store.amount_of(sold)} of {a(target)}, {standing}")
+        finish = forecast.get_month_end_range(day=day, hour=close, store=store)
+        if finish["likely"] is not None and not finish["month_finished"]:
+            chance = finish["chance_of_target_pct"]
+            lines.append(f"Likely finish: {a(finish['low'])} to {a(finish['high'])}"
+                         + (f" ({chance}% {forecast.CHANCE_PHRASE[finish['yardstick']]})"
+                            if chance is not None else ""))
+    else:
+        lines.append(f"*Month:* {store.amount_of(sum(p['units_sold_so_far'] for p in pace))} so far "
+                     f"(no targets to judge by yet)")
+
+    today = kpi.get_today_pace(day=day, hour=close, store=store)
+    sold_today = store.sales.loc[store.sales["day"] == day, store.sold_column].sum()
+    expected_today = sum(t["expected_by_now"] for t in today if t["expected_by_now"] is not None)
+    lines.append(f"*Today:* {store.amount_of(sold_today)}"
+                 + (f" (expected about {a(expected_today)})" if expected_today else ""))
+
+    diagnoses = diagnosis.diagnose_store(day, close, store=store)
+    behind = sorted((d for d in diagnoses if d["status"] == "behind"), key=lambda d: d["pct_vs_pace"])
+    if behind:
+        lines.append("*Behind:*")
+        lines += [f"- {d['category']} ({d['pct_vs_pace']:+.0f}%): {SHORT_CAUSE.get(d['cause'], d['cause'])}"
+                  for d in behind[:5]]
+        if len(behind) > 5:
+            lines.append(f"- and {len(behind) - 5} more")
+    else:
+        lines.append("*Behind:* nothing clearly behind")
+    ahead = sorted((p for p in pace if p["status"] == "ahead"), key=lambda p: -p["pct_vs_pace"])[:3]
+    if ahead:
+        lines.append("*Going well:* " + ", ".join(f"{p['category']} ({p['pct_vs_pace']:+.0f}%)" for p in ahead))
+
+    if day < store.days_in_month and judged:
+        goal = plan._goal(store, day, judged)
+        tomorrow = WEEKDAY_NAMES[store.weekday(day + 1)]
+        lines.append(f"*Tomorrow ({tomorrow}):* {store.amount_of(goal['needs'])} {forecast.GOAL_PHRASE[goal['yardstick']]}"
+                     if goal["needs"] > 0 else f"*Tomorrow ({tomorrow}):* target already reached")
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     text = generate_digest()
     print(text)
     print(f"\n({len(text.split())} words)")
+    print("\nWhatsApp report:\n")
+    print(whatsapp_report())

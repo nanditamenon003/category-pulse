@@ -12,13 +12,18 @@ each function uses the latest count at or before the moment asked about,
 and says which count that was.
 """
 
+import math
+
 from config import (
     BROKEN_RUN_MIN_SHARE,
     CORE_DEPLETED_MAX_UNITS,
+    DELIVERY_CYCLE_DAYS,
     LAST_PIECE_THRESHOLD,
+    REQUEST_DAYS_WITHOUT_SCHEDULE,
+    REQUEST_SAFETY_Z,
     STOCKOUT_MAX_SHARE,
 )
-from store import resolve
+from store import WEEKDAY_NAMES, resolve
 
 
 def _validate(store, category, day, hour):
@@ -364,6 +369,96 @@ def get_days_of_cover(category, day=None, hour=None, store=None):
         "note": ("Projection: assumes each size keeps selling at its average over the last 7 days "
                  "it was on the shelf."),
         "sizes": sizes,
+    }
+
+
+def _in_stock_rate(store, category, size, through, sold):
+    """
+    Units a day this size sells on days it was on the shelf, from the last 14
+    days (or the whole month if that's too few). Days it was sold out are left
+    out, so a size missing for a week isn't mistaken for a slow seller.
+    `sold` is {day: units} for this size. Returns None if it was on the shelf
+    on fewer than 3 days.
+    """
+    for first in (max(1, through - 13), 1):
+        days = []
+        for d in range(first, through + 1):
+            prev = _closing_hour(store, d - 1)
+            had_stock = prev is None or store.stock_lookup.get((category, d - 1, prev), {}).get(size, 0) > 0
+            if had_stock or sold.get(d, 0) > 0:
+                days.append(d)
+        if len(days) >= 3:
+            return float(sum(sold.get(d, 0) for d in days)) / len(days)
+    return None
+
+
+def get_request_quantities(day=None, hour=None, store=None):
+    """
+    How many of each size to ask for (from the warehouse or a nearby store)
+    so the shelf lasts until the delivery after next, at the rate each size
+    sells when it's on the shelf, with a safety margin on core sizes (rules
+    in config.py). A projection: it assumes sizes keep selling as they have.
+    """
+    store, day, hour = resolve(store, day, hour)
+    store.require("stock")
+    through = day if hour >= store.hours[-1] else day - 1
+    if store.delivery_weekday is not None:
+        to_next = next(k for k in range(1, 8) if store.weekday(day + k) == store.delivery_weekday)
+        cover_days = to_next + DELIVERY_CYCLE_DAYS
+        basis = (f"enough to last until the delivery after next ({cover_days} days of selling, with "
+                 f"deliveries on {WEEKDAY_NAMES[store.delivery_weekday]}s)")
+    else:
+        cover_days = REQUEST_DAYS_WITHOUT_SCHEDULE
+        basis = f"about {cover_days} days of selling (no fixed delivery day is set)"
+
+    to_delivery = to_next if store.delivery_weekday is not None else None
+    sold_by = {}  # category -> size -> {day: units}
+    rows_so_far = store.sales[store.sales["day"] <= through]
+    for (category, size, d), units in rows_so_far.groupby(["category", "size", "day"])["units_sold"].sum().items():
+        sold_by.setdefault(category, {}).setdefault(size, {})[d] = units
+
+    categories = []
+    for category in store.categories:
+        on_hand = get_stock_status(category, day, hour, store=store)["remaining_by_size"]
+        core = store.core_sizes[category]
+        rates = {s: _in_stock_rate(store, category, s, through, sold_by.get(category, {}).get(s, {}))
+                 for s in on_hand}
+        known_core = sorted(r for s, r in rates.items() if s in core and r is not None)
+        rows = []
+        for size, units in on_hand.items():
+            rate = rates[size]
+            if rate is None and size in core and known_core:
+                rate = known_core[len(known_core) // 2]  # hardly ever on the shelf: like its fellow core sizes
+            if not rate:
+                continue
+            demand = rate * cover_days
+            safety = REQUEST_SAFETY_Z * math.sqrt(demand) if size in core else 0.0
+            request = math.ceil(demand + safety - units - 1e-9)
+            if request > 0:
+                rows.append({"size": size, "is_core_size": size in core, "units_on_hand": int(units),
+                             "avg_per_day_when_in_stock": round(rate, 1), "request": request,
+                             "out_now": units == 0,
+                             # Gone before the next delivery can bring more: needs a transfer, not just an order.
+                             "urgent": units < rate * (to_delivery or 3)})
+        if rows:
+            categories.append({
+                "category": category,
+                "line": store.category_line[category],
+                "sizes": rows,
+                "total": sum(r["request"] for r in rows),
+                "core_sizes_out": [r["size"] for r in rows if r["is_core_size"] and r["out_now"]],
+                "urgent_sizes": [r["size"] for r in rows if r["urgent"]],
+                "text": ", ".join(f"{r['size']} x {r['request']}" if r["size"] != "All sizes"
+                                  else f"{r['request']} units" for r in rows),
+            })
+    # Most urgent first: core sizes already out, then sizes that won't last to the next delivery.
+    categories.sort(key=lambda c: (-len(c["core_sizes_out"]), -len(c["urgent_sizes"]), -c["total"]))
+    return {
+        "as_of": {"day": day, "hour": hour},
+        "cover_days": cover_days,
+        "basis": basis,
+        "note": "A projection: assumes each size keeps selling as it has on days it was in stock.",
+        "categories": categories,
     }
 
 
