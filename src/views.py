@@ -62,6 +62,7 @@ from ui import (
     plan_message_text,
     line_card,
     pace_at,
+    pace_words,
     page_title,
     pill,
     playbook_for,
@@ -237,7 +238,7 @@ def _problem_row(p, diag):
         f'{progress_bar(p["units_sold_so_far"], p["monthly_target"], p["expected_units_by_now"])}'
         f'<div class="cp-small">{esc(s.amount(p["units_sold_so_far"]))} of {esc(s.amount(p["monthly_target"]))} '
         f'{esc(_yardstick_note(p))}· '
-        f'{abs(p["pct_vs_pace"]):.0f}% {"behind" if p["pct_vs_pace"] < 0 else "ahead of"} pace · '
+        f'{pace_words(p["pct_vs_pace"])} · '
         f'{esc(_needs_text(p))}</div>'
         f'<div class="cp-row-text">{esc(evidence)}</div>'
         f'</div><div class="cp-chev">&rsaquo;</div></div>'
@@ -354,7 +355,7 @@ def today_page():
         month_cards = kpi_card("Month so far", a(sold), f"of about {a(expected)} expected by now") + end_card
     html_block('<div class="cp-kpis">'
                + month_cards
-               + kpi_card("Need action", f"{len(behind)} behind", f"{len(drifting)} drifting",
+               + kpi_card("Need action", f"{len(behind)} behind", f"{len(drifting)} to watch",
                           tone="red" if behind else "")
                + (kpi_card("Today so far", a(today_sold), f"of about {a(today_expected)} by now")
                   if lines_judged else
@@ -406,7 +407,7 @@ def today_page():
     if drifting:
         html_block(heading("Keep an eye on", "slipping, but could still be normal ups and downs"))
         for p in drifting:
-            text = f"{abs(p['pct_vs_pace']):.0f}% behind pace, {_needs_text(p).split(',')[0]}"
+            text = f"{pace_words(p['pct_vs_pace'])}, {_needs_text(p).split(',')[0]}"
             if clickable(f"drift_{slug(p['category'])}", _compact_row("amber", p["category"], text),
                          f"Open {p['category']}"):
                 category_dialog(p["category"])
@@ -440,7 +441,8 @@ def category_dialog(category):
 
     if st.button("Ask the AI about this category", icon=":material/forum:",
                                              key="ask_about"):
-        status_word = STATUS[p["status"]][0].lower()
+        status_word = {"behind": "behind", "drifting": "slipping", "on_pace": "on track",
+                       "ahead": "ahead"}.get(p["status"], "being tracked")
         st.session_state["chat_pending"] = (f"{category} is {status_word} this month. Why, and what "
                                             f"should the floor team do about it?")
         st.session_state["open_chat"] = True
@@ -459,7 +461,7 @@ def _why_tab(p, diag):
         html_block('<div class="cp-kpis">'
                    + kpi_card("Sold this month", a(p["units_sold_so_far"]), f"of {a(p['monthly_target'])} {yardstick(p)}")
                    + kpi_card("Expected by now", a(p["expected_units_by_now"]),
-                              f"{p['pct_vs_pace']:+.0f}% vs pace")
+                              pace_words(p["pct_vs_pace"]))
                    + kpi_card("Selling per day", a(p["actual_units_per_day"], per_day=True),
                               "the month is over" if p["month_finished"] else
                               f"needs {a(p['needed_units_per_day'], per_day=True)}/day "
@@ -592,16 +594,16 @@ def _sell_tab(category, detail, hour):
 def _tier_table(playbook):
     table = pd.DataFrame([
         {
-            "Tier": t["tier"],
-            "Takes up cross-sells": f"{t['cross_sell_response_rate_pct']:.0f}%",
+            "Customer": t["tier"],
+            "Say yes to an extra item": f"{t['cross_sell_response_rate_pct']:.0f} in 100",
             "Share of bills": f"{t['share_of_transactions_pct']}%",
             "Offer at the till": t["offer_at_the_till"],
         }
         for t in playbook["tiers_ranked_by_response"]
     ])
     st.dataframe(table, hide_index=True, width="stretch")
-    html_block('<div class="cp-small">Targeting is by loyalty tier only. No individual customer data '
-               'is used, by design.</div>')
+    html_block('<div class="cp-small">By loyalty tier only (Platinum, Gold, Silver, not a member): no '
+               'individual customer\'s data is used, by design.</div>')
 
 
 # --- Other pages ------------------------------------------------------------------------------
@@ -671,12 +673,12 @@ def pace_chart(pace):
     order = list(df["Category"])
 
     color = alt.Color("Status:N", legend=None, scale=alt.Scale(
-        domain=["Behind", "Drifting", "On pace", "Ahead", "Too early", "No target"],
+        domain=["Behind", "Watch", "On track", "Ahead", "Too early", "No target"],
         range=[RED, AMBER, GREEN, GREEN, NEUTRAL, NEUTRAL]))
     y = alt.Y("Category:N", sort=order, title=None,
               axis=alt.Axis(labelLimit=180, labelOverlap=False, grid=False, ticks=False))
     bars = alt.Chart(df).mark_bar(height=14).encode(
-        x=alt.X("Percent of expected:Q", title="Sold as % of expected by now (100 = on pace)",
+        x=alt.X("Percent of expected:Q", title="Sold as % of where it should be by now (100 = on track)",
                 axis=alt.Axis(grid=False)),
         y=y, color=color,
         tooltip=["Category", "Status", "Sold", "Expected by now", "Percent of expected"],
@@ -693,7 +695,7 @@ def pace_chart(pace):
     ).configure(background=PAGE)
 
 
-STATUS_FILTER = {"Behind": "behind", "Drifting": "drifting", "On pace": "on_pace",
+STATUS_FILTER = {"Behind": "behind", "Watch": "drifting", "On track": "on_pace",
                  "Ahead": "ahead", "Too early": "too_early", "No target": "no_target"}
 SORT_ORDERS = {
     "By line": None,
@@ -721,14 +723,14 @@ def _category_table(shown, filters_key):
             "Target": p["monthly_target"],
             "Progress": (round(p["units_sold_so_far"] / p["monthly_target"] * 100)
                          if p["monthly_target"] else None),
-            "vs pace": p["pct_vs_pace"],
-            "Per day": p["actual_units_per_day"],
+            "Ahead / behind": p["pct_vs_pace"],
+            "Selling per day": p["actual_units_per_day"],
             "Needs per day": p["needed_units_per_day"],
-            "Month-end (projection)": p["projected_month_end_if_current_rate_continues"],
+            "Month-end (likely)": p["projected_month_end_if_current_rate_continues"],
         }
         for p in shown
     ])
-    status_colour = {"Behind": RED, "Drifting": "#8A6300", "On pace": GREEN, "Ahead": GREEN}
+    status_colour = {"Behind": RED, "Watch": "#8A6300", "On track": GREEN, "Ahead": GREEN}
     styled = rows.style.map(
         lambda v: f"color: {status_colour.get(v, TEXT)}; font-weight: 700", subset=["Status"])
     # A new key per filter combination, so a ticked row doesn't carry over to a
@@ -741,8 +743,10 @@ def _category_table(shown, filters_key):
             # Neutral, like the card progress bars: indigo is kept for things you can click.
             "Progress": st.column_config.ProgressColumn(
                 "Sold vs target", min_value=0, max_value=100, format="%d%%", color=TEXT),
-            "vs pace": st.column_config.NumberColumn("vs pace", format="%+.0f%%"),
-            "Per day": st.column_config.NumberColumn(format="%.1f"),
+            "Ahead / behind": st.column_config.NumberColumn(
+                "Ahead / behind", format="%+.0f%%",
+                help="How far ahead of (+) or behind (-) where it should be by now."),
+            "Selling per day": st.column_config.NumberColumn(format="%.1f"),
             "Needs per day": st.column_config.NumberColumn(format="%.1f"),
         },
     )
@@ -759,11 +763,11 @@ def _category_table(shown, filters_key):
 
 def categories_page():
     if _no_data("Categories", "Every category will show here",
-                "Each category's month-to-date pace against its target, as cards, a table or a chart."):
+                "How every category is doing this month against its target, as cards, a table or a chart."):
         return
     hour = current_hour()
-    page_title("Categories", "Every category's month-to-date pace. Tap a card or a row for the "
-                             "full picture.")
+    page_title("Categories", "How every category is doing this month against its target. Tap a card "
+                             "or a row for the full picture.")
     pace = pace_at(hour)
     diags = diagnoses_at(hour)
 
@@ -776,7 +780,7 @@ def categories_page():
     ])
     with st.container(horizontal=True, wrap=True, vertical_alignment="center", gap="small"):
         with st.popover(f"Filters · {active} on" if active else "Filters", icon=":material/tune:"):
-            department = st.segmented_control("Department", ["All"] + current_store().departments,
+            department = st.segmented_control("Floor", ["All"] + current_store().departments,
                                               default="All",
                                               key="cat_department") or "All"
             statuses = st.pills("Status", list(STATUS_FILTER), selection_mode="multi",
@@ -1116,31 +1120,35 @@ def _tomorrow(s):
 
 def sell_page():
     if _no_data("Sell", "What to say at the till will show here",
-                "Cross-sell ideas for categories that are behind, aimed at the loyalty tier most "
-                "likely to respond."):
+                "For each category that's behind: what to suggest with it, and the offer each kind "
+                "of customer is likeliest to say yes to."):
         return
     hour = current_hour()
-    page_title("Sell", "Cross-sell ideas for categories behind pace, and what each loyalty tier "
-                       "responds to.")
+    page_title("Sell", "What to say at the till to help the categories that are behind, and which "
+                       "offer each kind of customer likes best.")
     ideas = cross_sell_at(hour)
 
-    html_block(heading("Cross-sell ideas right now", "only for categories that are genuinely behind"))
+    html_block(heading("Help these categories today", "only the ones really behind this month"))
     if not ideas:
-        html_block('<div class="cp-panel"><p>No category is behind pace, so there\'s no cross-sell '
-                   'push needed right now.</p></div>')
+        html_block('<div class="cp-panel"><p>No category is behind this month, so there\'s nothing '
+                   'extra to push at the till right now.</p></div>')
     for category, idea in ideas.items():
         cause = idea["stock_verdict"] if idea["stock_verdict"] in ("stockout", "broken_size_run") else None
-        first = (f'<div class="cp-do"><b>First:</b> {esc(idea["supply_action"])}</div>'
+        first = (f'<div class="cp-do"><b>Before the till (manager):</b> {esc(idea["supply_action"])}</div>'
                  if idea.get("supply_action") else "")
+        steps = idea.get("steps") or [idea["at_the_till"]]
         html_block(
             f'<div class="cp-panel">{pill(idea["status"])}{cause_chip(cause)}'
-            f'<div class="cp-row-name">{esc(category)}</div>{first}'
-            f'<div class="cp-do"><b>At the till:</b> {esc(idea["at_the_till"])}</div></div>'
+            f'<div class="cp-row-name">{esc(category)} '
+            f'<span class="cp-small">{abs(idea["pct_vs_pace"]):.0f}% behind this month</span></div>{first}'
+            f'<div class="cp-do"><b>At the till:</b><ol style="margin:4px 0 0;padding-left:20px">'
+            + "".join(f'<li style="font-size:14px;margin:2px 0">{esc(step)}</li>' for step in steps)
+            + '</ol></div></div>'
         )
         if st.button(f"Open {category} details", key=f"sell_open_{slug(category)}", type="tertiary"):
             category_dialog(category)
 
-    html_block(heading("Loyalty tier playbook", "pick any category"))
+    html_block(heading("Which offer works for whom", "pick any category"))
     if not current_store().has_loyalty:
         _not_in_data("loyalty tier figures", "upload loyalty tier figures")
         return
@@ -1148,15 +1156,15 @@ def sell_page():
     chosen = st.selectbox("Category", options, key="sell_category", label_visibility="collapsed")
     _tier_table(playbook_for(chosen))
 
-    with st.expander("Best-responding tier for every category"):
+    with st.expander("The likeliest customers to say yes, for every category"):
         best = []
         for category in current_store().categories:
             tiers = playbook_for(category)["tiers_ranked_by_response"]
             if not tiers:
                 continue
             top = tiers[0]
-            best.append({"Category": category, "Best tier": top["tier"],
-                         "Takes up cross-sells": f"{top['cross_sell_response_rate_pct']:.0f}%",
+            best.append({"Category": category, "Most likely to say yes": top["tier"],
+                         "Say yes to an extra item": f"{top['cross_sell_response_rate_pct']:.0f} in 100",
                          "Offer at the till": top["offer_at_the_till"]})
         st.dataframe(pd.DataFrame(best), hide_index=True, width="stretch")
 
@@ -1217,7 +1225,7 @@ def plan_page():
         markup = (f'<div class="cp-row {tone}"><div style="flex:1;min-width:0">{pill(f["status"])}'
                   + (cause_chip(f["cause"]) if f["status"] == "behind" else "")
                   + f'<div class="cp-row-name">{esc(f["category"])} '
-                  f'<span class="cp-small">{f["pct_vs_pace"]:+.0f}% vs pace</span></div>'
+                  f'<span class="cp-small">{pace_words(f["pct_vs_pace"])}</span></div>'
                   f'<div class="cp-row-text"><b>Do:</b> {esc(f["action"])}</div>{till}'
                   f'</div><div class="cp-chev">&rsaquo;</div></div>')
         if clickable(f"plan_{slug(f['category'])}", markup, f"Open {f['category']}"):
@@ -1302,7 +1310,7 @@ def summary_page():
     lines = [
         {
             "Line": l["line"],
-            "Department": l["department"],
+            "Floor": l["department"],
             "Units": l["units"],
             "Units share": f"{l['units_pct']}%",
             "Value": inr(l["value"]),
@@ -1310,7 +1318,7 @@ def summary_page():
         }
         for l in report["lines"]
     ]
-    lines.append({"Line": "Store", "Department": "", "Units": report["store_units"],
+    lines.append({"Line": "Store", "Floor": "", "Units": report["store_units"],
                   "Units share": "100%", "Value": inr(report["store_value"]), "Value share": "100%"})
     value_columns = [] if s.has_value else ["Value", "Value share", "Value (INR)"]
     st.dataframe(pd.DataFrame(lines).drop(columns=value_columns, errors="ignore"),

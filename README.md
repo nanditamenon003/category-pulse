@@ -19,7 +19,7 @@
 | **Categories** | All 29 categories as cards, a table or a chart, with filters. Tap any one for its detail |
 | **Stock** | Stockouts, broken size runs, what to request per size (downloadable), today's last-piece alerts, slow stock (what isn't selling and the money tied up in it), and sizes at risk of running out before the next delivery |
 | **Floor and staff** | In plain words: visitors today compared with a usual day, whether they're buying ("12 in every 100 visitors bought, down from 21") and what to check, tomorrow's busy times ("5-8 pm"), and how many people to put on each floor for however many you'll have |
-| **Sell** | Cross-sell scripts for the till, and what each loyalty tier responds to |
+| **Sell** | For each category that's behind, short steps for the till (what to show, what to suggest with it, which offer to make to whom), and which offer each loyalty tier is likeliest to say yes to |
 | **Summary** | The evening report as a short WhatsApp message (copy or share), the full end-of-day summary, and the month's contribution report |
 | **Your data** | Upload your sales as your till system exports them (plus stock, targets or visitor counts if you have them), check how each column was read, then see what it switches on before every page shows your numbers |
 | **Guide** | What each status and term means in plain English, how the AI chat works, and a button to start the tour |
@@ -50,7 +50,7 @@ Category Pulse is a layer on top of the store's existing system, not a replaceme
 
 | Feature | What the manager sees |
 |---|---|
-| **Month-to-date pace** | Every category's status in words and colour: Behind, Drifting, On pace, Ahead, or Too early to tell. Includes units per day needed vs actual, and a clearly labelled month-end projection. |
+| **Month-to-date pace** | Every category's status in words and colour: Behind, Watch (slipping, not yet proven), On track, Ahead, or Too early to tell. Shown as plainly as "21% behind". Includes units per day needed vs actual, and a clearly labelled month-end projection. |
 | **Real problems, not noise** | A category is only flagged "behind" if the gap is bigger than normal day-to-day randomness, so small categories don't raise false alarms. |
 | **Stock alerts** | Stockouts, **broken size runs** (the shelf looks full but the core sizes are gone), last-piece alerts, and early warnings for sizes likely to run out before the next delivery. |
 | **Diagnosis** | For each struggling category: stockout, broken size run, fewer visitors (traffic), or fewer buyers (conversion), with the evidence and one concrete action. |
@@ -87,7 +87,7 @@ The simulation is day 24 of a 31-day month, with four deliberate scenarios. None
 | Women Tops | Its day-18 delivery never arrives | Stockout, with shoppers still coming (normal footfall, collapsed buying) and the missed delivery named |
 | Men Casual Trousers ("chinos") | The warehouse is out of waists 32/34 all month | Broken size run: 60 units on the shelf, none in the sizes most people need |
 | Little Boys Tops | Sells well above plan | Ahead of pace |
-| Men Denim Jeans, Men Formal Shirts | Normal trading | On pace |
+| Men Denim Jeans, Men Formal Shirts | Normal trading | On track |
 
 ## Running it
 

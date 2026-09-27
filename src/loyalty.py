@@ -117,6 +117,20 @@ def _tier_pitch(playbook):
     return best, pitch
 
 
+def _tier_steps(playbook):
+    """The loyalty part of a till script as short steps: the lead tier's offer, then non-members'."""
+    if playbook is None or not playbook["tiers_ranked_by_response"]:
+        return []
+    best = playbook["tiers_ranked_by_response"][0]
+    rate = round(best["cross_sell_response_rate_pct"])
+    steps = [f"{_who(best['tier']).capitalize()} are the likeliest to say yes (about {rate} in 100): "
+             f"offer {best['offer_at_the_till']}."]
+    non_member = next((t for t in playbook["tiers_ranked_by_response"] if t["tier"] == "Non-member"), None)
+    if best["tier"] != "Non-member" and non_member:
+        steps.append(f"Not a member yet? Offer {non_member['offer_at_the_till']}.")
+    return steps
+
+
 def get_cross_sell_ideas(day=None, hour=None, statuses=("behind",), store=None):
     """
     Cross-sell ideas for every category whose month-to-date pace status is
@@ -129,7 +143,8 @@ def get_cross_sell_ideas(day=None, hour=None, statuses=("behind",), store=None):
       - otherwise (a demand problem): pair it with a complementary category
         that is selling well, aimed at the tier most likely to respond
     Each idea names a tier and an offer (when there's loyalty data), phrased
-    for use at the till.
+    for use at the till: as a paragraph ("at_the_till") and as short steps
+    ("steps") for the till team.
     """
     store, day, hour = resolve(store, day, hour)
 
@@ -172,10 +187,15 @@ def get_cross_sell_ideas(day=None, hour=None, statuses=("behind",), store=None):
                     f"{category} is sold out in most sizes, so don't lose the shopper: walk them "
                     f"to {partner}, which is selling well and in stock. {pitch}"
                 ).strip()
+                idea["steps"] = ([f"It's sold out in most sizes, so don't let the shopper leave: walk "
+                                  f"them to {partner}, which is selling well and in stock."]
+                                 + _tier_steps(playbook(partner)))
             else:
                 idea.update(partner=None, lead_tier=None, offer_type=None,
                             at_the_till=f"{category} is sold out and no in-stock substitute is "
-                                        f"doing well; focus on getting stock back.")
+                                        f"doing well; focus on getting stock back.",
+                            steps=["It's sold out and nothing similar is selling well: focus on "
+                                   "getting stock back."])
 
         else:
             partners = _eligible_partners(store, category, COMPLEMENTS.get(product, []),
@@ -184,6 +204,7 @@ def get_cross_sell_ideas(day=None, hour=None, statuses=("behind",), store=None):
             partner = partners[0]["category"] if partners else None
             idea.update(type="complement", partner=partner, lead_tier=best and best["tier"],
                         offer_type=best and best["preferred_offer_type"])
+            suggest = [f"Suggest {partner} with it, as an outfit."] if partner else []
             if partner:
                 pairing = f"Pair it with {partner} as an outfit."
             elif store.has_stock:
@@ -203,10 +224,13 @@ def get_cross_sell_ideas(day=None, hour=None, statuses=("behind",), store=None):
                     f"are gone. Until they're back, focus on shoppers who fit {plentiful}, where "
                     f"there's plenty of stock. {pairing} {pitch}"
                 ).strip()
+                idea["steps"] = ([f"Sizes {' and '.join(h['core_sizes'])} are gone for now: show shoppers who fit {plentiful}, "
+                                  f"where there's plenty."] + suggest + _tier_steps(playbook(category)))
             else:
                 idea["at_the_till"] = (
                     f"{category} is {abs(pace['pct_vs_pace']):.0f}% behind pace. {pairing} {pitch}"
                 ).strip()
+                idea["steps"] = suggest + _tier_steps(playbook(category))
         ideas.append(idea)
 
     return ideas

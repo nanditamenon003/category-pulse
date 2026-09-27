@@ -4,7 +4,7 @@ Shared look and building blocks for the Category Pulse web app.
 Everything visual that more than one page uses lives here: the palette and
 styling, the chosen time of day, cached data lookups, and small HTML pieces
 (status pills, cards, headings). Design rules from the spec: colour only for
-status (green on track, amber drifting, red behind) plus one indigo accent
+status (green on track, amber watch, red behind) plus one violet accent
 for interactive elements; one typeface (Inter); no shadows or gradients.
 """
 
@@ -49,8 +49,8 @@ def logo_uri(name="logo-mark-120.png"):
 
 STATUS = {
     "behind": ("Behind", "red"),
-    "drifting": ("Drifting", "amber"),
-    "on_pace": ("On pace", "green"),
+    "drifting": ("Watch", "amber"),
+    "on_pace": ("On track", "green"),
     "ahead": ("Ahead", "green"),
     "too_early": ("Too early", "neutral"),
     "no_target": ("No target", "neutral"),
@@ -673,6 +673,13 @@ def yardstick(p):
     return YARDSTICK.get(p.get("target_source") or "target", "target")
 
 
+def pace_words(pct):
+    """How far ahead of or behind where it should be by now, in words: '21% behind', 'right on track'."""
+    if abs(pct) < 1:
+        return "right on track"
+    return f"{abs(pct):.0f}% {'behind' if pct < 0 else 'ahead'}"
+
+
 def category_card(p, show_line=True, cause=None):
     s = current_store()
     name = p["category"] if show_line else s.category_product[p["category"]]
@@ -680,7 +687,7 @@ def category_card(p, show_line=True, cause=None):
     if not p["monthly_target"]:
         detail, of = "nothing to judge by yet", ""
     else:
-        detail = f"{p['pct_vs_pace']:+.0f}% vs pace"
+        detail = pace_words(p["pct_vs_pace"])
         if p.get("target_source") not in (None, "target"):
             detail += f" · vs {SHORT_YARDSTICK.get(p['target_source'], 'target')}"
         of = f'<span class="cp-of"> / {esc(s.amount(p["monthly_target"]))}</span>'
