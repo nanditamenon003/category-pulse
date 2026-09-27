@@ -8,13 +8,13 @@
 
 ### Finding your way around the site
 
-**First visit.** The welcome page offers **Log in**, **Create account** (through Auth0, which also offers "Continue with Google"), or **Look around without an account**.
+**First visit.** The welcome page shows what the app does (a preview of the app and a WhatsApp report, how it works in three steps, and what it does for a store) and offers **Create a free account**, **Log in** (both through Auth0, which also offers "Continue with Google"), or **Look around first** on a sample store.
 - **Signed in:** a short three-step welcome guide opens, ending with **Take the 2-minute tour** (a walkthrough with sample data) or **Skip** (straight to Your data). Until your data is uploaded, each page says what will appear there.
 - **Guests:** they explore the Sample Store, a made-up store with a few problems hidden in it.
 
 | Section | What it's for |
 |---|---|
-| **Today** | The home screen: four headline numbers (with the likely month-end range), what needs action now and why, and a "Start here" guide for first-time visitors |
+| **Today** | The home screen: four headline numbers (with the likely month-end range as a bar), a link to tomorrow's plan, a "Month so far" chart (sales so far against the path to target, and where the month is likely to land), what needs action now and why, and a "Start here" guide for first-time visitors |
 | **Plan** | Tomorrow's plan for the morning huddle: what tomorrow needs to sell, the categories to focus on and what to do, stock to request, busy hours and floor split, ready to share on WhatsApp |
 | **Categories** | All 29 categories as cards, a table or a chart, with filters. Tap any one for its detail |
 | **Stock** | Stockouts, broken size runs, what to request per size (downloadable), today's last-piece alerts, and sizes likely to run out before the next delivery |
@@ -195,7 +195,7 @@ category-pulse/
 ## Design choices in brief
 
 - **Every number comes from the data.** The AI must call tools before answering and may not estimate. Projections are always labelled as projections.
-- **Status before numbers.** Green, amber and red are used only for status, always with a word label (so it works for colour-blind users), plus one indigo accent colour for buttons. It's built to be read on a phone.
+- **Status before numbers.** Green, amber and red are used only for status, always with a word label (so it works for colour-blind users). Buttons and links use one accent colour, the violet from the logo; the logo's full gradient appears only on brand touches (the header line, the welcome page), so it's never mistaken for a status. It's built to be read on a phone.
 - **Privacy by design.** Loyalty targeting works at tier level (Platinum, Gold, Silver, Non-member). No individual customer data exists anywhere in the project. Only the columns in use are kept from an upload, encrypted when saved, and the AI sees a store's figures only after a clear yes.
 - **Honest about gaps.** Every feature says plainly when the data it needs is missing, rather than guessing.
 - **No machine-learning model (yet).** With one simulated store, a trained model would only re-learn the simulator's own rules. Simple, explainable projections are used instead. See the case study.
