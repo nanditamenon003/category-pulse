@@ -17,6 +17,7 @@ import streamlit as st
 
 import account
 import agent
+import storage
 import tour
 import upload
 import usage
@@ -154,13 +155,33 @@ def _no_data(page, what, detail):
 
 # --- Today ---------------------------------------------------------------------------------
 
+def privacy_promise():
+    """What happens to a person's data, in plain words. Only what the app actually does."""
+    if storage.is_configured():
+        return ("Your data stays private. It's encrypted before it's saved, visible only to your "
+                "account, never shared or sold, and you can delete it any time. The AI chat only sees "
+                "your figures after you say yes.")
+    return ("Your data stays private. It's used only while you're signed in on this visit, and it's "
+            "never saved, shared or sold. The AI chat only sees your figures after you say yes.")
+
+
+def _saved_line():
+    """When the person's data was saved to their account, or a note if saving didn't work."""
+    if st.session_state.get("save_note"):
+        return st.session_state["save_note"]
+    saved_at = st.session_state.get("saved_at")
+    if saved_at:
+        when = pd.Timestamp(saved_at).tz_convert("Asia/Kolkata").strftime("%d %b, %H:%M")
+        return f"Saved privately to your account ({when}), so it's here next time you sign in."
+    return ""
+
+
 def _your_store_note(s):
+    saved = _saved_line()
     html_block(
         '<div class="cp-panel"><div class="cp-panel-title">Your store</div>'
-        f'<p>Showing your uploaded data for {esc(s.month_name)} {s.month_start.year}, as at the '
-        f'close of day {s.today_day}. It\'s read for this visit only and isn\'t saved, and to keep it '
-        'private, the AI chat asks before it sends any of your figures to its AI service. To replace or '
-        'remove your data, go to Your data.</p>'
+        f'<p>Showing your data for {esc(s.month_name)} {s.month_start.year}, as at the close of day '
+        f'{s.today_day}. {esc(saved)} To replace or delete it, go to Your data.</p>'
         + "".join(f'<p class="cp-small">Note: {esc(w)}</p>' for w in s.warnings)
         + '</div>'
     )
@@ -960,7 +981,7 @@ def _read_upload(files):
     """Reads uploaded files into a store (or a plain error) and keeps the result for this session."""
     try:
         store, notes = upload.read_upload(files)
-        st.session_state["upload_result"] = {"ok": True, "store": store, "notes": notes}
+        st.session_state["upload_result"] = {"ok": True, "store": store, "notes": notes, "files": files}
     except StoreDataError as e:
         st.session_state["upload_result"] = {"ok": False, "problems": e.problems}
 
@@ -1009,10 +1030,65 @@ def _upload_preview(store, notes):
 
     if st.session_state.get("my_store") is store:
         html_block('<div class="cp-small" style="margin-top:8px">This is the store loaded above.</div>')
-    elif st.button("Show my store", key="show_upload", type="primary", icon=":material/arrow_forward:"):
+        return
+    if storage.is_configured():
+        html_block('<div class="cp-small" style="margin:8px 0">Showing it also saves it to your account, '
+                   'encrypted, so it\'s here next time you sign in.</div>')
+    if st.button("Show my store", key="show_upload", type="primary", icon=":material/arrow_forward:"):
         st.session_state["my_store"] = store
         st.session_state["tour_step"] = None
+        _save_to_account(store, st.session_state["upload_result"].get("files", []))
         st.switch_page(tour.PAGES["Today"])
+
+
+def load_saved_store():
+    """At the start of a visit: opens the person's saved data, if they have any."""
+    person = account.person_id()
+    if not (storage.is_configured() and person):
+        return
+    try:
+        with st.spinner("Opening your saved data..."):
+            saved = storage.load(person)
+            if saved is None:
+                return
+            store, notes = upload.read_upload(saved["files"])
+    except storage.StorageError as e:
+        st.session_state["save_note"] = str(e)
+        return
+    except StoreDataError:
+        st.session_state["save_note"] = ("Your saved file couldn't be read with this version of the app. "
+                                         "Please upload it again.")
+        return
+    st.session_state["my_store"] = store
+    st.session_state["upload_result"] = {"ok": True, "store": store, "notes": notes,
+                                         "files": saved["files"]}
+    st.session_state["saved_at"] = saved["saved_at"]
+
+
+def _save_to_account(store, files):
+    """Saves the uploaded files, encrypted, to the signed-in person's account (if saving is on)."""
+    st.session_state.pop("save_note", None)
+    st.session_state.pop("saved_at", None)
+    person = account.person_id()
+    if not (storage.is_configured() and person and files):
+        return
+    try:
+        storage.save(person, files, store.name)
+        st.session_state["saved_at"] = pd.Timestamp.now(tz="UTC").isoformat()
+    except storage.StorageError as e:
+        st.session_state["save_note"] = str(e)
+
+
+def _delete_my_data():
+    """Removes the person's data from this visit and, if saved, from their account."""
+    person = account.person_id()
+    if storage.is_configured() and person:
+        try:
+            storage.delete(person)
+        except storage.StorageError as e:
+            st.session_state["delete_note"] = str(e)
+            return
+    request_forget()
 
 
 def _step_heading(number, text, sub=""):
@@ -1036,20 +1112,22 @@ def your_data_page():
             st.button("Log in or create account", key="guest_signup", type="primary",
                       on_click=account.sign_in)
     elif mine is not None:
+        saved = _saved_line()
         html_block(heading("Your store")
                    + f'<div class="cp-panel"><p><b>{esc(mine.name)}</b>: {esc(mine.month_name)} '
                      f'{mine.month_start.year}, up to day {mine.today_day}. Every page is showing it. '
-                     'To replace it, upload a new file below.</p></div>')
-        if st.button("Remove my data", key="mine_forget", type="tertiary"):
-            request_forget()
+                     f'{esc(saved)} To replace it, upload a new file below.</p>'
+                     f'<p class="cp-small">{esc(privacy_promise())}</p></div>')
+        if st.session_state.get("delete_note"):
+            html_block(f'<div class="cp-small">{esc(st.session_state.pop("delete_note"))}</div>')
+        if st.button("Delete my data", key="mine_forget", type="tertiary", icon=":material/delete:"):
+            _delete_my_data()
             st.rerun()
     else:
         name = account.first_name()
         html_block(f'<div class="cp-panel"><p><b>Welcome{", " + esc(name) if name else ""}.</b> Three steps '
                    'and every page fills in with your store\'s numbers.</p>'
-                   '<p class="cp-small">Only use real company figures with your manager\'s approval. '
-                   'Your file is read for this visit only and isn\'t saved, and the AI chat asks before '
-                   'using it.</p></div>')
+                   f'<p class="cp-small">{esc(privacy_promise())}</p></div>')
         if st.button("Take the 2-minute tour first", key="data_tour", icon=":material/tour:",
                      type="tertiary"):
             tour.start()

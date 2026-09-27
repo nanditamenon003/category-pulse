@@ -266,7 +266,7 @@ def current_store():
 
 # Saved choices that only make sense for one store, cleared when the store in use changes.
 _STORE_SPECIFIC_KEYS = ("hour", "cat_department", "sell_category", "chat_chip")
-_UPLOAD_KEYS = ("my_store", "upload_result", "upload_key", "upload_files")
+_UPLOAD_KEYS = ("my_store", "upload_result", "upload_key", "upload_files", "saved_at", "save_note")
 
 
 def request_forget():

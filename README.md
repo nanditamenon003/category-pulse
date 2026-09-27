@@ -69,7 +69,7 @@ The **Your data** page has an Excel template with a *Read me* sheet explaining e
 - Ordinary spreadsheet habits are fine: report titles above the table, numbers like 1,200, times like 2 PM, names in different capitals, returns as negative units, and a stock count taken the next morning. Categories without a target are left out with a note, and every problem in a file is listed at once.
 - If an export doesn't start on the 1st of the month, the upload warns that the missing days count as no sales.
 - Before switching over, the page shows which features the data supports and what would switch the rest on. Anything a page can't show is explained ("Not in your data: stock counts..."), never guessed.
-- **Privacy:** uploaded data is read for the visitor's session only and not saved. "Remove my data" clears it. The **AI chat works on uploaded data only after a clear yes**: before its first answer in a visit, it explains that the figures it looks up are sent to its AI provider (DeepSeek) and asks the person to continue only with dummy data or approved figures. Only upload real company figures with the owner's approval.
+- **Saved to your account, privately:** when you show your store, the file is saved to your account so it's there next time you sign in. It's encrypted by the app before it leaves (with a key only the app holds), stored against a one-way fingerprint of your login rather than your email, never shared or sold, and **Delete my data** removes it completely. Without the storage settings, data lasts for the visit only. The **AI chat works on uploaded data only after a clear yes**: before its first answer in a visit, it explains that the figures it looks up are sent to its AI provider (DeepSeek) and asks the person to continue only with dummy data or approved figures. Only upload real company figures with the owner's approval.
 
 ### The Sample Store's month
 
@@ -118,6 +118,17 @@ server_metadata_url = "https://YOUR-AUTH0-DOMAIN/.well-known/openid-configuratio
 
 Auth0 handles creating accounts, passwords, "Continue with Google" and password resets; the app only receives the person's name and email.
 
+**For saving data to accounts**, create a free [Supabase](https://supabase.com) project, run the SQL in `src/storage.py` (one table, row-level security on), and add to the same secrets file:
+
+```toml
+[storage]
+supabase_url = "https://YOUR-PROJECT.supabase.co"
+supabase_key = "the project's secret (service_role) key"
+encryption_key = "generate once with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+```
+
+Use the same `encryption_key` everywhere the app runs, or data saved in one place can't be opened in another.
+
 **For the AI chat**, copy `.env.example` to `.env` and add a key for the provider set in `src/config.py` (`AI_PROVIDER`):
 
 - `"deepseek"` (current setting) needs `DEEPSEEK_API_KEY`
@@ -132,7 +143,7 @@ Each module can also be run on its own and prints its own checks, e.g. `python s
 ### Deploying (Streamlit Community Cloud, free)
 
 1. Sign in at [share.streamlit.io](https://share.streamlit.io) with GitHub and create an app from this repository, with the main file `src/app.py` and Python 3.11.
-2. Under **Advanced settings → Secrets**, add `DEEPSEEK_API_KEY = "your-key"` and, below it, the `[auth]` settings above, with `redirect_uri` set to the live address + `/oauth2callback`.
+2. Under **Advanced settings → Secrets**, add `DEEPSEEK_API_KEY = "your-key"` and, below it, the `[auth]` and `[storage]` settings above, with `redirect_uri` set to the live address + `/oauth2callback`.
 3. Deploy. The chat is for signed-in users only, with daily limits counted on the server (`QUESTIONS_PER_DAY` per account and `ALL_QUESTIONS_PER_DAY` for everyone, in `src/config.py`), so neither one visitor nor a busy day can use up the API credit. A page refresh doesn't reset them.
 
 ## Project structure
@@ -154,12 +165,14 @@ category-pulse/
 │   ├── app.py            the web app's frame: top menu, time and account buttons, chat button
 │   ├── account.py        the welcome page, sign-in with Auth0, log out, and guest mode
 │   ├── usage.py          daily limits on AI chat questions
+│   ├── storage.py        saving uploaded data to accounts, encrypted (Supabase)
 │   ├── views.py          the pages and the pop-ups (welcome guide, category detail, chat)
 │   ├── tour.py           the guided tour
 │   └── ui.py             shared styling, building blocks and cached data lookups
 ├── tests/
 │   ├── test_any_store.py runs the engine on a different, made-up store
-│   └── test_upload.py    the upload path: sample round trip, CSV files, refusals
+│   ├── test_upload.py    the upload path: sample round trip, CSV files, refusals
+│   └── test_storage.py   saving to accounts: scrambled at rest, owner-only, delete
 ├── .streamlit/config.toml  theme (colours, hidden menus)
 ├── data/                   generated data (not stored in git; rebuilt from the seed)
 ├── .env.example            where API keys go (the real .env is never committed)

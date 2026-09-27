@@ -40,6 +40,10 @@ if not signed_in and not account.is_guest():
     st.stop()
 
 st.session_state["member"] = signed_in
+# Someone signed in with data saved to their account gets it back, once per visit.
+if signed_in and st.session_state.get("my_store") is None and not st.session_state.get("tried_saved"):
+    st.session_state["tried_saved"] = True
+    views.load_saved_store()
 store = prepare_session()  # before any widget is drawn
 
 PAGES = {
