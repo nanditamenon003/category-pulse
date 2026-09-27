@@ -75,12 +75,16 @@ def test_csv_with_loose_headers():
 
 
 def test_template_headers_are_all_recognised():
+    import smart_import
+
     for sheet, headers in upload.TEMPLATE.items():
         if sheet == "Settings":
             continue
-        known = upload.COLUMNS[upload.SHEETS[sheet.lower()]]
-        unknown = [h for h in headers if upload._plain(h) not in known]
+        role = smart_import._role_from_name(sheet)
+        mapping = smart_import.guess_columns(role, headers)
+        unknown = [h for h, field in mapping.items() if field is None]
         assert not unknown, f"{sheet}: {unknown}"
+        assert role == smart_import._role_from_columns(headers, upload.pd.DataFrame(columns=headers)), sheet
 
 
 def test_filled_template():
@@ -145,7 +149,7 @@ def test_forgiving_uploads():
             writer, sheet_name="Targets", index=False)
     store, notes = upload.read_upload([("june.xlsx", buffer.getvalue())])
     assert int(store.sales["units_sold"].sum()) == int(sales["units"].sum())
-    assert any("skipped 2 rows" in n for n in notes)
+    assert any("skipped 2 rows" in n for n in notes), notes
 
     bad = sales.astype({"units": object, "hour": object}).copy()
     bad.loc[bad.index[0], "units"] = "five"

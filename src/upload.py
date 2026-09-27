@@ -1,39 +1,36 @@
 """
-A store's own data: the Excel template, the sample file, and reading uploads.
+A store's own data: reading uploads, the Excel template, and the sample file.
 
-The template has one sheet per table. Targets and Sales are required; Stock,
-Visitors, Loyalty and Settings are optional, and each one unlocks more of
-the app (see feature_checklist). Column names are matched loosely (case,
-spaces, and anything in brackets are ignored, and common alternatives like
-"Qty" for "Units" are accepted), so an export from the store's own system
-needs little tidying. CSV files work too, one per table, named after it
-(e.g. sales.csv).
-
-The sample file is the simulated demo month written into the template, so
-anyone can see exactly how to fill it in, or try the upload in one click.
+Only sales are required, in whatever shape the store's system exports them
+(smart_import.py works out what each table and column is). Targets, stock,
+visitors, loyalty tiers and settings are optional, and each unlocks more of
+the app (see feature_checklist). The template is there for stores that
+would rather fill something in; the sample file is the Sample Store's month
+written into it.
 """
 
 import functools
 import hashlib
 import io
-import re
-from datetime import date, datetime
 
 import pandas as pd
 
+import smart_import
 from store import WEEKDAY_NAMES, StoreDataError, build_store, demo_store
 
 # --- The template ---------------------------------------------------------------------------
 
 # Sheet -> its column headers, as they appear in the template.
 TEMPLATE = {
-    "Targets": ["Line", "Category", "Floor (optional)", "Monthly target (units)",
-                "Last year (units, optional)", "Sizes (optional)", "Core sizes (optional)"],
-    "Sales": ["Date", "Hour (optional)", "Line", "Category", "Size (optional)", "Units",
+    "Targets": ["Line (optional)", "Category", "Floor (optional)", "Monthly target (units)",
+                "Monthly target in ₹", "Last year (units, optional)", "Sizes (optional)",
+                "Core sizes (optional)"],
+    "Sales": ["Date", "Hour (optional)", "Line (optional)", "Category", "Size (optional)", "Units",
               "Value (₹, optional)", "Bills (optional)"],
-    "Stock": ["Date", "Hour (optional)", "Line", "Category", "Size (optional)", "Units on hand"],
+    "Stock": ["Date", "Hour (optional)", "Line (optional)", "Category", "Size (optional)",
+              "Units on hand"],
     "Visitors": ["Date", "Hour (optional)", "Floor (optional)", "Visitors"],
-    "Loyalty": ["Tier", "Line", "Category", "Share of bills (%)", "Average bill value (₹)",
+    "Loyalty": ["Tier", "Line (optional)", "Category", "Share of bills (%)", "Average bill value (₹)",
                 "Units per bill", "Takes up cross-sells (%)", "Preferred offer"],
     "Settings": ["Setting", "Value"],
 }
@@ -42,18 +39,21 @@ SETTINGS_ROWS = ["Store name", "Delivery day", "Sale days"]
 READ_ME = [
     ("Category Pulse: store data template", ""),
     ("", ""),
-    ("How to fill it in", "One month of data. Keep each sheet's header row as it is. Targets and Sales "
-                          "are required; the other sheets are optional and each one unlocks more of "
-                          "the app. Leave a sheet empty if you don't have that data."),
+    ("How to fill it in", "One month of data. Keep each sheet's header row as it is. Only Sales is "
+                          "required; the other sheets are optional and each one unlocks more of the "
+                          "app. Leave a sheet empty if you don't have that data. You don't have to use "
+                          "this template: your system's own sales export works too."),
     ("", ""),
-    ("Targets", "One row per category: its line, the category (e.g. Polo), the floor it's on "
-                "(e.g. Menswear), and its monthly target in units. Optional: last year's units; its "
-                "sizes in shelf order, separated by commas (S, M, L, XL); its core sizes, the ones "
-                "most shoppers need (M, L). If core sizes are left blank they're worked out from "
-                "sales."),
-    ("Sales", "One row per sale line: date, line, category and units. Optional: the hour (10 means "
-              "10:00-11:00), the size, the value in rupees, and the number of bills. Rows can be "
-              "per bill or already totalled; they're added up either way. If bills are only known "
+    ("Targets", "One row per category: the category (e.g. Polo), and its monthly target in units, in "
+                "rupees, or both. Optional: its line and the floor it's on (e.g. Menswear); last "
+                "year's units; its sizes in shelf order, separated by commas (S, M, L, XL); its core "
+                "sizes, the ones most shoppers need (M, L). If core sizes are left blank they're "
+                "worked out from sales. Only have targets per floor, or one for the whole store? "
+                "Put those in instead, or type the store's target on the upload page. No targets at "
+                "all? Each category is then compared with its own pace earlier in the month."),
+    ("Sales", "One row per sale line: date, category and units. Optional: the line, the hour (10 "
+              "means 10:00-11:00), the size, the value in rupees, and the number of bills. Rows can "
+              "be per bill or already totalled; they're added up either way. If bills are only known "
               "per category and hour, put the count on one row and leave the others blank."),
     ("Stock", "Units on hand by category and size, counted at the close of a day (or at an hour, "
               "if you count hourly). One count on the last day is enough; a count every day also "
@@ -68,37 +68,12 @@ READ_ME = [
                  "deliveries; and any sale days, as day numbers separated by commas (e.g. 13, 27)."),
     ("", ""),
     ("Dates", "Any normal date format works; day first (24/05/2026) is read as the day."),
-    ("Privacy", "Only upload real company figures with your manager's approval. The app reads the "
-                "file for your session only and doesn't save it, and the AI chat is switched off "
-                "for uploaded data."),
+    ("Privacy", "Your data stays private: only the columns the app uses are kept, they're encrypted "
+                "before they're saved, visible only to your account, never shared or sold, and you "
+                "can delete them any time. The AI chat only sees your figures after you say yes."),
 ]
 
 # --- Reading uploads ------------------------------------------------------------------------
-
-SHEETS = {"targets": "targets", "target": "targets", "sales": "sales", "stock": "stock",
-          "inventory": "stock", "visitors": "visitors", "footfall": "visitors",
-          "loyalty": "loyalty", "settings": "settings"}
-
-_PRODUCT = {"category": "product", "product": "product", "product type": "product"}
-_FLOOR = {"floor": "department", "department": "department", "zone": "department"}
-COLUMNS = {
-    "targets": {"line": "line", **_PRODUCT, **_FLOOR, "monthly target": "target", "target": "target",
-                "last year": "last_year", "ly": "last_year", "sizes": "sizes", "core sizes": "core_sizes"},
-    "sales": {"date": "date", "bill date": "date", "hour": "hour", "time": "hour", "line": "line",
-              **_PRODUCT, "size": "size", "units": "units", "qty": "units", "quantity": "units",
-              "units sold": "units", "value": "value", "sales value": "value", "net value": "value",
-              "amount": "value", "net sales": "value", "bills": "transactions",
-              "transactions": "transactions", "invoices": "transactions", "no of bills": "transactions"},
-    "stock": {"date": "date", "hour": "hour", "time": "hour", "line": "line", **_PRODUCT,
-              "size": "size", "units on hand": "units", "units": "units", "qty": "units",
-              "stock": "units", "soh": "units", "closing stock": "units"},
-    "visitors": {"date": "date", "hour": "hour", "time": "hour", **_FLOOR, "visitors": "visitors",
-                 "footfall": "visitors", "walk-ins": "visitors", "walk ins": "visitors"},
-    "loyalty": {"tier": "tier", "line": "line", **_PRODUCT,
-                "share of bills": "share_of_transactions", "average bill value": "avg_basket_value",
-                "units per bill": "avg_upt", "takes up cross-sells": "cross_sell_response_rate",
-                "preferred offer": "preferred_offer_type"},
-}
 
 OFFERS = {"bundle": "bundle", "outfit bundle": "bundle",
           "first-purchase discount": "percentage_discount", "discount": "percentage_discount",
@@ -112,171 +87,47 @@ OFFER_WORDS = {"bundle": "outfit bundle", "percentage_discount": "first-purchase
                "complimentary_service": "free alteration"}
 
 
-def _plain(text):
-    """'Value (₹, optional)' -> 'value'; 'Units_Sold' -> 'units sold'."""
-    text = re.sub(r"\(.*?\)", "", str(text)).replace("_", " ").lower()
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _table_for(sheet_name):
-    """Which table a sheet or file holds, from its name: 'Sales', 'sales.csv', 'Sales report May'."""
-    plain = _plain(sheet_name)
-    if plain in SHEETS:
-        return SHEETS[plain]
-    return next((table for key, table in SHEETS.items() if key in plain), None)
-
-
-def _find_header(rows, table):
+def build(tables, extras=None):
     """
-    The row that holds the column headings: exported reports often have a
-    title and a date range above the table. It's the first of the top 20
-    rows with at least two headings this table uses. None if there isn't one.
+    A Store from the tables found in an upload, as they're currently set
+    (smart_import.find_tables, perhaps changed on the upload page), plus any
+    details typed in. Returns (store, notes, files to save: only the columns
+    in use). Raises StoreDataError listing every problem.
     """
-    wanted = 1 if table == "settings" else 2
-    for i, row in enumerate(rows[:20]):
-        known = sum(_plain(cell) in COLUMNS.get(table, {}) or (table == "settings" and _plain(cell) == "setting")
-                    for cell in row if cell is not None and str(cell).strip() and str(cell) != "nan")
-        if known >= wanted:
-            return i
-    return None
+    problems = smart_import.check_choices(tables)
+    if problems:
+        raise StoreDataError(problems)
+    canonical, settings, notes = smart_import.canonical_tables(tables, extras)
 
-
-def _with_header(raw, table, sheet, notes):
-    """A sheet read without headings -> a table with the right heading row."""
-    raw = raw.dropna(how="all")
-    if raw.empty:
-        return raw
-    rows = raw.values.tolist()
-    at = _find_header(rows, table)
-    if at is None:
-        if table == "settings":
-            return raw
-        raise StoreDataError(f"Couldn't find the column headings in \"{sheet}\". The table should start "
-                             f"with a row of headings like Date, Line, Category and Units.")
-    if at > 0:
-        notes.append(f"\"{sheet}\": skipped {at} row{'s' if at > 1 else ''} above the headings.")
-    header = [str(c).strip() if c is not None and str(c) != "nan" else f"Unnamed {i}"
-              for i, c in enumerate(rows[at])]
-    return pd.DataFrame(rows[at + 1:], columns=header).dropna(how="all")
-
-
-def _read_csv(name, data):
-    """A CSV file as rows of cells, whatever its encoding."""
-    import csv
-
-    for encoding in ("utf-8-sig", "cp1252"):
-        try:
-            text = data.decode(encoding)
-            break
-        except UnicodeDecodeError:
-            continue
-    else:
-        raise StoreDataError(f"{name} couldn't be read as text.")
-    rows = [row for row in csv.reader(io.StringIO(text)) if any(cell.strip() for cell in row)]
-    width = max((len(r) for r in rows), default=0)
-    return pd.DataFrame([r + [None] * (width - len(r)) for r in rows]).replace({"": None})
-
-
-def _read_files(files):
-    """[(file name, bytes)] -> {table name: DataFrame}, plus notes about what was skipped."""
-    tables, notes = {}, []
-    for name, data in files:
-        lower = name.lower()
-        if lower.endswith((".xlsx", ".xlsm")):
-            try:
-                sheets = pd.read_excel(io.BytesIO(data), sheet_name=None, engine="openpyxl", header=None)
-            except Exception as e:
-                raise StoreDataError(f"{name} couldn't be opened as an Excel file ({e}).")
-        elif lower.endswith(".csv"):
-            sheets = {re.sub(r"\.csv$", "", name, flags=re.I): _read_csv(name, data)}
-        else:
-            raise StoreDataError(f"{name} isn't an Excel (.xlsx) or CSV file.")
-        for sheet, raw in sheets.items():
-            table = _table_for(sheet)
-            if table is None:
-                if _plain(sheet) not in ("read me", "readme", "instructions"):
-                    notes.append(f"Skipped the sheet \"{sheet}\" (not one of the template's sheets).")
-                continue
-            df = _with_header(raw, table, sheet, notes)
-            if not df.empty:
-                tables[table] = df
-    return tables, notes
-
-
-def _rename(df, table, notes):
-    mapping, ignored = {}, []
-    for column in df.columns:
-        canonical = COLUMNS[table].get(_plain(column))
-        if canonical and canonical not in mapping.values():
-            mapping[column] = canonical
-        else:
-            ignored.append(str(column))
-    if ignored and not all(c.startswith("Unnamed") for c in ignored):
-        notes.append(f"{table.title()}: ignored the column(s) {', '.join(ignored)}.")
-    return df[list(mapping)].rename(columns=mapping)
-
-
-def _settings(df):
-    """The Settings sheet -> (store name, delivery weekday or None, sale days)."""
-    values = {}
-    if df is not None and df.shape[1] >= 2:
-        for _, row in df.iterrows():
-            values[_plain(row.iloc[0])] = row.iloc[1]
-    name = values.get("store name")
-    name = str(name).strip() if pd.notna(name) and str(name).strip() else "Your store"
-
-    delivery = values.get("delivery day")
-    weekday = None
-    if pd.notna(delivery) and str(delivery).strip():
-        wanted = str(delivery).strip().lower()[:3]
-        matches = [i for i, day in enumerate(WEEKDAY_NAMES) if day.lower().startswith(wanted)]
-        if not matches:
-            raise StoreDataError(f"Settings: the delivery day {delivery!r} isn't a weekday name.")
-        weekday = matches[0]
-
-    sale_days, raw = [], values.get("sale days")
-    if isinstance(raw, (datetime, date)):
-        sale_days = [raw.day]
-    elif pd.notna(raw) and str(raw).strip():
-        for part in (p.strip() for p in re.split(r"[,;]", str(raw)) if p.strip()):
-            if re.fullmatch(r"\d{1,2}(\.0)?", part):  # a day number, e.g. 13
-                sale_days.append(int(float(part)))
-                continue
-            when = pd.to_datetime(part, errors="coerce", dayfirst=True)  # a date, e.g. 13/05/2026
-            if pd.isna(when):
-                raise StoreDataError(f"Settings: the sale day {part!r} isn't a day number or a date.")
-            sale_days.append(when.day)
-    return name, weekday, sale_days
-
-
-def read_upload(files):
-    """
-    Reads uploaded files ([(name, bytes)]: one Excel template, or CSV files
-    named after the tables) into a Store. Returns (store, notes): notes are
-    small things about how the file was read, while store.warnings are
-    things to check about the data. Raises StoreDataError listing every
-    problem if the data can't be used.
-    """
-    tables, notes = _read_files(files)
-    missing = [t.title() for t in ("targets", "sales") if t not in tables]
-    if missing:
-        raise StoreDataError(f"No {' or '.join(missing)} found. The {' and '.join(missing)} "
-                             f"sheet{'s need' if len(missing) > 1 else ' needs'} at least one row.")
-    renamed = {t: _rename(df, t, notes) for t, df in tables.items() if t != "settings"}
-    name, delivery_weekday, sale_days = _settings(tables.get("settings"))
-
-    loyalty = renamed.get("loyalty")
+    loyalty = canonical["loyalty"]
     if loyalty is not None and "preferred_offer_type" in loyalty.columns:
         loyalty["preferred_offer_type"] = loyalty["preferred_offer_type"].map(
-            lambda v: OFFERS.get(_plain(v), _plain(v).replace(" ", "_")))
+            lambda v: OFFERS.get(smart_import.plain(v), smart_import.plain(v).replace(" ", "_")))
 
+    files = smart_import.to_files(canonical, settings)
     fingerprint = hashlib.sha1(b"".join(data for _, data in files)).hexdigest()[:12]
     store = build_store(
-        renamed["targets"], renamed["sales"], renamed.get("stock"), renamed.get("visitors"), loyalty,
-        name=name, store_id=f"upload-{fingerprint}", sale_days=sale_days,
-        delivery_weekday=delivery_weekday,
+        canonical["targets"], canonical["sales"], canonical["stock"], canonical["visitors"], loyalty,
+        name=settings.get("name") or "Your store", store_id=f"upload-{fingerprint}",
+        sale_days=settings.get("sale_days", ()), delivery_weekday=settings.get("delivery_weekday"),
     )
-    return store, notes
+    return store, notes, files
+
+
+def read_upload(files, extras=None, remembered=None):
+    """
+    Reads uploaded files ([(name, bytes)]: any Excel or CSV files, the
+    template or the store's own exports) into a Store, with every guess as
+    made. Returns (store, notes): notes say how the files were read, while
+    store.warnings are things to check about the data. Raises
+    StoreDataError listing every problem if the data can't be used.
+    """
+    tables, notes = smart_import.find_tables(files, remembered)
+    if not tables:
+        raise StoreDataError("No tables were found in the file. It needs at least your sales: a row of "
+                             "headings (like Date, Category and Units), then one row per sale.")
+    store, more, _ = build(tables, extras)
+    return store, notes + more
 
 
 # --- What the data unlocks ----------------------------------------------------------------------
@@ -290,7 +141,7 @@ def feature_checklist(store):
     features = [
         ("Month-to-date pace and status for every category", True, ""),
         ("Contribution report and end-of-day summary", True, ""),
-        ("Rupee values in the contribution report", store.has_value, "add Value to Sales"),
+        ("Rupee values, and pace in rupees", store.has_value, "add Value to Sales"),
         ("Step through the day hour by hour", store.hourly, "add Hour to Sales"),
         ("Broken size runs and core sizes", store.has_sizes and store.has_stock,
          "add Size to Sales and Stock" if store.has_stock else "add a Stock sheet with sizes"),
@@ -358,12 +209,10 @@ def sample_bytes():
     s = demo_store()
     t = TEMPLATE
 
-    targets = pd.DataFrame([{
-        t["Targets"][0]: s.category_line[c], t["Targets"][1]: s.category_product[c],
-        t["Targets"][2]: s.category_department[c], t["Targets"][3]: s.targets[c],
-        t["Targets"][4]: s.last_year.get(c), t["Targets"][5]: ", ".join(s.sizes[c]),
-        t["Targets"][6]: ", ".join(s.core_sizes[c]),
-    } for c in s.categories])
+    targets = pd.DataFrame([dict(zip(t["Targets"], [
+        s.category_line[c], s.category_product[c], s.category_department[c], s.targets[c],
+        s.value_targets[c], s.last_year.get(c), ", ".join(s.sizes[c]), ", ".join(s.core_sizes[c]),
+    ])) for c in s.categories])
 
     # One row per category, hour and size that sold; each category-hour's
     # bills sit on its first row, as the Read me describes.
@@ -373,7 +222,7 @@ def sample_bytes():
     first_row = ~sales.duplicated(["day", "hour", "category"])
     sales = pd.DataFrame({
         "Date": sales["day"].map(s.date), "Hour (optional)": sales["hour"],
-        "Line": sales["line"], "Category": sales["category"].map(s.category_product),
+        "Line (optional)": sales["line"], "Category": sales["category"].map(s.category_product),
         "Size (optional)": sales["size"], "Units": sales["units_sold"],
         "Value (₹, optional)": sales["value"].round(2),
         "Bills (optional)": sales["transactions"].where(first_row),
@@ -381,7 +230,7 @@ def sample_bytes():
 
     closing = s.stock[s.stock["hour"] == s.hours[-1]]
     stock = pd.DataFrame({
-        "Date": closing["day"].map(s.date), "Line": closing["line"],
+        "Date": closing["day"].map(s.date), "Line (optional)": closing["line"],
         "Category": closing["category"].map(s.category_product), "Size (optional)": closing["size"],
         "Units on hand": closing["units_remaining"],
     })
@@ -392,7 +241,7 @@ def sample_bytes():
     })
 
     loyalty = pd.DataFrame({
-        "Tier": s.loyalty["tier"], "Line": s.loyalty["category"].map(s.category_line),
+        "Tier": s.loyalty["tier"], "Line (optional)": s.loyalty["category"].map(s.category_line),
         "Category": s.loyalty["category"].map(s.category_product),
         "Share of bills (%)": s.loyalty["share_of_transactions"],
         "Average bill value (₹)": s.loyalty["avg_basket_value"],
