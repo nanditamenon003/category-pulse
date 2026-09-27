@@ -22,6 +22,7 @@ CAUSE_CLAUSE = {
     "broken_size_run": "has a broken size run: plenty on the shelf, but not the sizes most people need",
     "traffic_drop": "getting fewer visitors than usual",
     "conversion_drop": "getting normal visitors but fewer buyers",
+    "slow_seller": "selling slowly though there's plenty in stock",
     "unclear": "slipping with no clear cause yet",
 }
 
@@ -165,7 +166,9 @@ def generate_digest(day=None, hour=None, store=None):
     pace = kpi.get_category_pace(day, hour, store=store)
     diagnoses = diagnosis.diagnose_store(day, hour, store=store)
     ideas = {i["category"]: i for i in loyalty.get_cross_sell_ideas(day, hour, store=store)}
-    drifting = [d["category"] for d in diagnoses if d["status"] == "drifting"]
+    drifting = [d["category"] for d in diagnoses if d["status"] == "drifting" and d["cause"] != "slow_seller"]
+    slow_sellers = [d["category"] for d in diagnoses
+                    if d["status"] == "drifting" and d["cause"] == "slow_seller"]  # behind ones: in the problems
     weak_lines = [t for t in kpi.get_today_pace(day=day, hour=hour, store=store)
                   if t["status"] == "behind"]
 
@@ -174,6 +177,10 @@ def generate_digest(day=None, hour=None, store=None):
         _problems_paragraph(store, diagnoses, ideas),
         f"Watch, but don't act yet: {_join(drifting)} {'is' if len(drifting) == 1 else 'are'} "
         f"slipping without a clear cause." if drifting else None,
+        f"Slow sellers: {_join(slow_sellers)} {'has' if len(slow_sellers) == 1 else 'have'} weeks of "
+        f"unsold stock on the shelf. Give {'it' if len(slow_sellers) == 1 else 'them'} a better spot, "
+        f"and hold further orders until {'it sells' if len(slow_sellers) == 1 else 'they sell'} through."
+        if slow_sellers else None,
         _wins_paragraph(store, day, hour, pace),
         "Today: " + _join(f"the {t['line']} line sold {store.amount(t['units_sold_today'])} of an "
                           f"expected {store.amount(t['expected_by_now'])}" for t in weak_lines) + "."
@@ -191,6 +198,7 @@ SHORT_CAUSE = {
     "broken_size_run": "core sizes gone",
     "traffic_drop": "fewer visitors",
     "conversion_drop": "fewer buyers",
+    "slow_seller": "slow seller, plenty in stock",
     "unclear": "no clear cause yet",
 }
 

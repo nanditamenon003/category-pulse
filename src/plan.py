@@ -91,7 +91,7 @@ def get_plan(day=None, store=None):
             "pct_vs_pace": d["pct_vs_pace"],
             "cause": d["cause"],
             "headline": d["headline"],
-            "action": d["action"] if d["status"] == "behind" else
+            "action": d["action"] if d["status"] == "behind" or d["cause"] != "unclear" else
             "Watch it: slipping, but it could still be normal ups and downs.",
             "needs_per_day": p["needed_units_per_day"],
             "target_source": p["target_source"],

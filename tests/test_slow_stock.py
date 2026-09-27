@@ -66,6 +66,19 @@ def test_slow_stock_stays_slow():
           f"tied up, about {first['weeks_of_stock']:.0f} weeks' worth. Space could go to {first['replace_with']}.")
 
 
+def test_slow_seller_is_named_as_the_cause():
+    """A category behind with weeks of unsold stock gets "slow seller", not "no clear cause"."""
+    import diagnosis
+
+    d = demo_store()
+    close = d.hours[-1]
+    causes = {x["category"]: x["cause"] for x in diagnosis.diagnose_store(hour=close, store=d)}
+    assert causes["Men Formal Blazers"] == "slow_seller", causes["Men Formal Blazers"]
+    assert causes["Men Casual Trousers"] == "broken_size_run" and causes["Women Tops"] == "stockout"
+    print("\nMen Formal Blazers: behind with 10 weeks of stock on the shelf, so the cause is "
+          "\"slow seller\" (display and hold orders), not \"no clear cause\".")
+
+
 def test_at_risk_is_a_fair_watch_list():
     d = demo_store()
     close = d.hours[-1]
@@ -106,6 +119,7 @@ def test_early_month_and_missing_stock():
 
 if __name__ == "__main__":
     test_slow_stock_stays_slow()
+    test_slow_seller_is_named_as_the_cause()
     test_at_risk_is_a_fair_watch_list()
     test_early_month_and_missing_stock()
     print("\nAll checks passed.")

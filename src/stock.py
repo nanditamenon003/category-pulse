@@ -483,6 +483,29 @@ def get_request_quantities(day=None, hour=None, store=None):
 # a margin rather than trying to time it) serve that need better. Slow stock is
 # different: it's read from what has already happened, so it's solid.
 
+def get_weeks_of_stock(category, day=None, hour=None, store=None):
+    """
+    How many weeks the category's stock would last at the rate each size sells
+    when it's on the shelf, with the pieces on hand. (None, pieces) when it
+    hasn't sold at all; None before SLOW_WINDOW_DAYS days of sales.
+    """
+    from config import SLOW_WINDOW_DAYS
+
+    store, day, hour = resolve(store, day, hour)
+    _validate(store, category, day, hour)
+    through = day if hour >= store.hours[-1] else day - 1
+    if through < SLOW_WINDOW_DAYS:
+        return None
+    rows = store.sales[(store.sales["category"] == category) & (store.sales["day"] <= through)]
+    by_size = {}
+    for (size, d), units in rows.groupby(["size", "day"])["units_sold"].sum().items():
+        by_size.setdefault(size, {})[d] = units
+    on_hand = get_stock_status(category, day, hour, store=store)["remaining_by_size"]
+    rate = sum(_in_stock_rate(store, category, s, through, by_size.get(s, {})) or 0 for s in on_hand)
+    pieces = int(sum(on_hand.values()))
+    return (pieces / rate / 7 if rate > 0 else None), pieces
+
+
 def get_slow_stock(day=None, hour=None, store=None):
     """
     Stock that isn't selling, most money tied up first:

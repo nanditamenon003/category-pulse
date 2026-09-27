@@ -1223,7 +1223,7 @@ def plan_page():
         till = f'<div class="cp-row-text"><b>At the till:</b> {esc(f["at_the_till"])}</div>' \
             if f["at_the_till"] else ""
         markup = (f'<div class="cp-row {tone}"><div style="flex:1;min-width:0">{pill(f["status"])}'
-                  + (cause_chip(f["cause"]) if f["status"] == "behind" else "")
+                  + (cause_chip(f["cause"]) if f["status"] == "behind" or f["cause"] != "unclear" else "")
                   + f'<div class="cp-row-name">{esc(f["category"])} '
                   f'<span class="cp-small">{pace_words(f["pct_vs_pace"])}</span></div>'
                   f'<div class="cp-row-text"><b>Do:</b> {esc(f["action"])}</div>{till}'

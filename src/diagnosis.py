@@ -22,12 +22,16 @@ ACTIONS = {
     "conversion_drop": ("Shoppers are coming but not buying: check every size is out on the floor "
                         "(not in the backroom), prices and offers are clearly marked, and put a "
                         "trained associate on the section at peak time."),
+    "slow_seller": ("Stock isn't the problem, demand is: move it to a better-seen spot on the {zone} "
+                    "floor, show it at the till with a matching piece, and hold further orders until "
+                    "it sells through."),
     "unclear": ("No single cause shows in the data yet, so this may be normal ups and downs. "
                 "Keep watching; if it is still slipping in two days, check the display and sizes "
                 "on the floor."),
 }
 
 HEADLINES = {
+    "slow_seller": "Plenty on the shelf, but few are buying it: a slow seller, not a stock problem.",
     "stockout": "Out of stock: shoppers are still coming, but there is nothing to sell.",
     "broken_size_run": ("Broken size run: the shelf looks full, but the sizes most shoppers need "
                         "are gone."),
@@ -98,6 +102,15 @@ def diagnose(category, day=None, hour=None, store=None):
         cause = "conversion_drop"
     else:
         cause = "unclear"
+        # Healthy sizes but weeks of stock piling up: the shelf isn't the issue, demand is.
+        if verdict == "healthy":
+            from config import SLOW_COVER_WEEKS, SLOW_MIN_CATEGORY_UNITS
+
+            cover = stock.get_weeks_of_stock(category, day, hour, store=store)
+            if cover and cover[1] >= SLOW_MIN_CATEGORY_UNITS and (cover[0] is None or cover[0] > SLOW_COVER_WEEKS):
+                cause = "slow_seller"
+                weeks = f"about {cover[0]:.0f} weeks' worth at its recent rate" if cover[0] else "and it has hardly sold"
+                evidence.append(f"{cover[1]} pieces on hand, {weeks}: plenty of stock, few buyers.")
 
     if conversion is None:
         missing = [MISSING_LABEL[w] for w in ("footfall", "transactions") if not getattr(store, f"has_{w}")]

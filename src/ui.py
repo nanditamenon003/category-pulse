@@ -728,6 +728,7 @@ CAUSE_TAG = {
     "broken_size_run": "Broken size run",
     "traffic_drop": "Fewer visitors",
     "conversion_drop": "Fewer buyers",
+    "slow_seller": "Slow seller",
     "unclear": "No clear cause yet",
 }
 
