@@ -251,13 +251,7 @@ def load_data():
     return demo_store()
 
 
-def current_store():
-    """
-    The store the pages show, or None:
-      - during the guided tour, the Sample Store (the tour is written for it)
-      - for someone signed in, their own uploaded data, or None until they upload
-      - for guests, the Sample Store
-    """
+def _base_store():
     if st.session_state.get("tour_step") is not None:
         return load_data()
     if st.session_state.get("member"):
@@ -265,8 +259,23 @@ def current_store():
     return load_data()
 
 
+def current_store():
+    """
+    The store the pages show, or None:
+      - during the guided tour, the Sample Store in units (the tour is written for it)
+      - for someone signed in, their own uploaded data, or None until they upload
+      - for guests, the Sample Store
+    judged in units or rupees, as chosen with the switch at the top ("measure").
+    """
+    store = _base_store()
+    if store is None or st.session_state.get("tour_step") is not None:
+        return store
+    measure = st.session_state.get("measure")
+    return store.for_measure(measure if measure in store.measures else store.default_measure)
+
+
 # Saved choices that only make sense for one store, cleared when the store in use changes.
-_STORE_SPECIFIC_KEYS = ("hour", "cat_department", "sell_category", "chat_chip")
+_STORE_SPECIFIC_KEYS = ("hour", "cat_department", "sell_category", "chat_chip", "measure")
 _UPLOAD_KEYS = ("my_store", "upload_result", "upload_key", "upload_files", "saved_at", "save_note")
 
 
@@ -288,14 +297,16 @@ def prepare_session():
         # Worked-out results for the uploaded data go too (the Sample Store's rebuild on demand).
         _lookup.clear()
         _slow_lookup.clear()
-    store = current_store()
-    store_id = store.id if store is not None else None
+    base = _base_store()
+    store_id = base.id if base is not None else None  # the same store in units or rupees
     if st.session_state.get("store_in_use", store_id) != store_id:
         for key in list(st.session_state):
             if key in _STORE_SPECIFIC_KEYS or str(key).startswith(("category_table_", "last_pick_")):
                 del st.session_state[key]
     st.session_state["store_in_use"] = store_id
-    return store
+    if base is not None and st.session_state.get("measure") not in base.measures:
+        st.session_state["measure"] = base.default_measure
+    return current_store()
 
 def current_hour():
     """The hour slot the whole app is looking at (10 = 10:00-11:00 ... 19 = 19:00-20:00)."""
@@ -504,6 +515,29 @@ def heading(text, sub=""):
     return f'<div class="cp-h">{esc(text)}{sub_html}</div>'
 
 
+YARDSTICK = {
+    "target": "target",
+    "floor share": "target (estimated from the floor's)",
+    "line share": "target (estimated from the line's)",
+    "store share": "target (estimated from the store's)",
+    "from rupee target": "target (from the ₹ target)",
+    "from unit target": "target (from the unit target)",
+    "last year": "last year",
+    "own pace": "its earlier pace",
+}
+
+
+SHORT_YARDSTICK = {"floor share": "estimated target", "line share": "estimated target",
+                   "store share": "estimated target", "from rupee target": "₹ target",
+                   "from unit target": "unit target", "last year": "last year",
+                   "own pace": "its earlier pace"}
+
+
+def yardstick(p):
+    """What a category's pace is measured against: 'target', 'last year', 'its earlier pace'..."""
+    return YARDSTICK.get(p.get("target_source") or "target", "target")
+
+
 def category_card(p, show_line=True, cause=None):
     s = current_store()
     name = p["category"] if show_line else s.category_product[p["category"]]
@@ -512,6 +546,8 @@ def category_card(p, show_line=True, cause=None):
         detail, of = "nothing to judge by yet", ""
     else:
         detail = f"{p['pct_vs_pace']:+.0f}% vs pace"
+        if p.get("target_source") not in (None, "target"):
+            detail += f" · vs {SHORT_YARDSTICK.get(p['target_source'], 'target')}"
         of = f'<span class="cp-of"> / {esc(s.amount(p["monthly_target"]))}</span>'
     if p["status"] in ("behind", "drifting") and p["needed_units_per_day"] > 0:
         detail += f" · needs {s.amount(p['needed_units_per_day'], per_day=True)}/day"
@@ -530,7 +566,9 @@ def line_card(t):
     tone = STATUS[t["status"]][1]
     return (
         f'<div class="cp-card {tone}">{pill(t["status"])}'
-        f'<div class="cp-name">{esc(t["line"])} <span class="cp-small">{esc(t["department"])}</span></div>'
+        f'<div class="cp-name">{esc(t["line"])}'
+        + (f' <span class="cp-small">{esc(t["department"])}</span>' if t["department"] != t["line"] else "")
+        + '</div>'
         + (f'<div class="cp-num">{esc(s.amount(t["units_sold_today"]))}<span class="cp-of"> / '
            f'{esc(s.amount(t["expected_by_now"]))}</span></div>'
            f'<div class="cp-small">sold today / expected by now</div></div>'

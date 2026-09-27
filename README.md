@@ -20,7 +20,7 @@
 | **Floor and staff** | Visitors and buyers per floor zone, and tomorrow's peak hours and floor split |
 | **Sell** | Cross-sell scripts for the till, and what each loyalty tier responds to |
 | **Summary** | The end-of-day summary and the month's contribution report, both downloadable |
-| **Your data** | Three steps: download the Excel template, fill it in and upload it, then check what it switches on before every page shows your numbers |
+| **Your data** | Upload your sales as your till system exports them (plus stock, targets or visitor counts if you have them), check how each column was read, then see what it switches on before every page shows your numbers |
 | **Guide** | What each status and term means in plain English, how the AI chat works, and a button to start the tour |
 
 - **Guided tour:** "Take the 2-minute tour" walks through the site in seven stops on the Sample Store. It moves between pages by itself and outlines what to look at on each one.
@@ -57,19 +57,21 @@ Category Pulse is a layer on top of the store's existing system, not a replaceme
 | **Staffing** | Tomorrow's peak hours per floor zone, learned from past days of the same kind (weekday vs weekend). |
 | **End-of-day summary** | A short plain-English summary to replace the evening spreadsheet: where the month stands, what's behind and why, what to do tomorrow. |
 | **AI chat** | Ask anything ("why is womenswear behind — traffic or conversion?"). The AI answers by calling the same tools, and a **"How I got this"** panel shows every lookup and number it used. |
-| **Your own data** | Upload a month of your store's figures in an Excel template (or CSV files) and every page switches to your store. See below. |
+| **Your own data** | Upload your store's own exports, in whatever shape they come, and every page switches to your store. Pace can be judged in units or rupees (a switch at the top). See below. |
 
 ### Using your own store's data
 
-The **Your data** page has an Excel template with a *Read me* sheet explaining every column, and a sample file (the Sample Store's month, filled in).
+Managers rarely have a tidy spreadsheet in a template's format, so the **Your data** page takes what they do have.
 
-- **Required:** *Targets* (line, category, monthly target) and *Sales* (date, line, category, units).
-- **Optional, each switching on more:** hours, sizes, rupee values and bill counts in *Sales*; a *Stock* sheet (one count is enough, a daily count also shows deliveries); a *Visitors* sheet (per floor, by day or hour); a *Loyalty* sheet (tier level only); and *Settings* (store name, delivery day, sale days).
-- Column names are matched loosely (for example "Qty" works for "Units", and day-first dates like 24/05/2026 are read correctly), so an export from the store's own system needs little tidying. CSV files work too, one per sheet.
-- Ordinary spreadsheet habits are fine: report titles above the table, numbers like 1,200, times like 2 PM, names in different capitals, returns as negative units, and a stock count taken the next morning. Categories without a target are left out with a note, and every problem in a file is listed at once.
+- **Only sales are required**: a date, a category and units sold, one row per bill line or per day. Rupee values, sizes, times and bill numbers each add more. Stock reports, targets, visitor counts and loyalty tier figures are optional extra files or sheets.
+- **Any export works as it comes.** The app finds the table under a report title, works out whether each sheet is sales, stock, targets or visitors, and works out each column from the words shops use ("Qty", "Net Amt", "Bill No", "Sub Category", "SOH", "Target Value"...). A Men/Women column beside the real category becomes the floor. It drops Grand Total rows, takes each sale's hour from the bill time, counts bills, keeps the latest month, and reads a single stock report run the next morning as the previous close. The page shows **how it read each column**, with a dropdown to change any of it, and remembers the choices for next month's file.
+- **Targets in whatever form they exist**: per category, per floor, per line or one number for the whole store, in units, rupees or both; or typed on the upload page; or none. Floor and store targets are shared across categories by how each sold before the last week (so one slipping category still shows), and labelled as estimates. With no target, a category is judged against **last year's sales** for the month (read from the same file if it goes back a year) or, failing that, against **its own pace earlier in the month**, so "behind" means it has slowed down. Every screen says which yardstick it's using.
+- **Units or rupees:** a switch at the top judges every category's pace in units sold or in rupees (the noise check scales by the average price). Rupees are shown as shops say them: ₹45,000, ₹2.45 L, ₹1.20 Cr.
+- Ordinary spreadsheet habits are fine: numbers like 1,200, times like 2 PM, names in different capitals, returns as negative units. Categories with sales but no target are kept (with a note), and every problem in a file is listed at once.
 - If an export doesn't start on the 1st of the month, the upload warns that the missing days count as no sales.
-- Before switching over, the page shows which features the data supports and what would switch the rest on. Anything a page can't show is explained ("Not in your data: stock counts..."), never guessed.
-- **Saved to your account, privately:** when you show your store, the file is saved to your account so it's there next time you sign in. It's encrypted by the app before it leaves (with a key only the app holds), stored against a one-way fingerprint of your login rather than your email, never shared or sold, and **Delete my data** removes it completely. Without the storage settings, data lasts for the visit only. The **AI chat works on uploaded data only after a clear yes**: before its first answer in a visit, it explains that the figures it looks up are sent to its AI provider (DeepSeek) and asks the person to continue only with dummy data or approved figures. Only upload real company figures with the owner's approval.
+- Before switching over, the page shows how each category will be judged, which features the data supports and what would switch the rest on. Anything a page can't show is explained ("Not in your data: stock counts..."), never guessed.
+- The Excel template (with a *Read me* sheet) is still there for stores that would rather fill something in.
+- **Saved to your account, privately:** when you show your store, **only the columns in use** are saved (customer names, phone numbers and anything else in an export are dropped first), so it's there next time you sign in. It's encrypted by the app before it leaves (with a key only the app holds), stored against a one-way fingerprint of your login rather than your email, never shared or sold, and **Delete my data** removes it completely. Without the storage settings, data lasts for the visit only. The **AI chat works on uploaded data only after a clear yes**: before its first answer in a visit, it explains that the figures it looks up are sent to its AI provider (DeepSeek) and asks the person to continue only with dummy data or approved figures. Only upload real company figures with the owner's approval.
 
 ### The Sample Store's month
 
@@ -138,7 +140,7 @@ The chat code is the same for both: DeepSeek offers an Anthropic-compatible endp
 
 Each module can also be run on its own and prints its own checks, e.g. `python src/kpi.py` (pace table and contribution report), `python src/stock.py`, `python src/digest.py` (end-of-day summary), or `python src/agent.py` (terminal chat).
 
-`python tests/test_upload.py` checks that the sample file reads back exactly as the Sample Store, that loosely named CSV files work, and that broken files are refused with a plain message. `python tests/test_any_store.py` runs the whole engine on a made-up store that looks nothing like the Sample Store (different lines, month and opening hours, stock counted once a day), and on a bare version with only daily sales totals. It checks that planted problems are found and that missing data is reported plainly, not guessed.
+`python tests/test_upload.py` checks that the sample file reads back exactly as the Sample Store, that loosely named CSV files work, and that broken files are refused with a plain message. `python tests/test_smart_import.py` reads a raw bill-level till export (report title, date and time in one cell, customer columns, a Grand Total row, last month and last year mixed in) with no help, and checks floor targets in rupees, a typed store target, that saved data reads back the same, and that changed column choices are remembered. `python tests/test_any_store.py` runs the whole engine on a made-up store that looks nothing like the Sample Store (different lines, month and opening hours, stock counted once a day), and on a bare version with only daily sales totals. It checks that planted problems are found and that missing data is reported plainly, not guessed.
 
 ### Deploying (Streamlit Community Cloud, free)
 
@@ -153,7 +155,8 @@ category-pulse/
 ├── src/
 │   ├── config.py         all business rules and settings in one place (thresholds, AI provider), plus the Sample Store
 │   ├── store.py          a store: its lines, targets, sizes, calendar and data; builds the Sample Store or any store's own tables
-│   ├── upload.py         the Excel template, the sample file, and reading uploads into a store
+│   ├── smart_import.py   reads any export: finds tables, works out columns, picks the month, finds last year
+│   ├── upload.py         turns an upload into a store; the Excel template and the sample file
 │   ├── generate_data.py  simulates the store month: sales, stock, deliveries, footfall, loyalty tiers
 │   ├── kpi.py            month-to-date pace, today's pace, contribution report, footfall, traffic vs conversion
 │   ├── stock.py          stock status and history, broken size runs, last-piece alerts, days of cover
@@ -172,6 +175,7 @@ category-pulse/
 ├── tests/
 │   ├── test_any_store.py runs the engine on a different, made-up store
 │   ├── test_upload.py    the upload path: sample round trip, CSV files, refusals
+│   ├── test_smart_import.py  raw till exports, flexible targets, remembered column choices
 │   └── test_storage.py   saving to accounts: scrambled at rest, owner-only, delete
 ├── .streamlit/config.toml  theme (colours, hidden menus)
 ├── data/                   generated data (not stored in git; rebuilt from the seed)
@@ -185,15 +189,15 @@ category-pulse/
 
 - **Every number comes from the data.** The AI must call tools before answering and may not estimate. Projections are always labelled as projections.
 - **Status before numbers.** Green, amber and red are used only for status, always with a word label (so it works for colour-blind users), plus one indigo accent colour for buttons. It's built to be read on a phone.
-- **Privacy by design.** Loyalty targeting works at tier level (Platinum, Gold, Silver, Non-member). No individual customer data exists anywhere in the project. Uploaded store data stays in the visitor's session and never goes to the AI.
+- **Privacy by design.** Loyalty targeting works at tier level (Platinum, Gold, Silver, Non-member). No individual customer data exists anywhere in the project. Only the columns in use are kept from an upload, encrypted when saved, and the AI sees a store's figures only after a clear yes.
 - **Honest about gaps.** Every feature says plainly when the data it needs is missing, rather than guessing.
 - **No machine-learning model (yet).** With one simulated store, a trained model would only re-learn the simulator's own rules. Simple, explainable projections are used instead. See the case study.
 
 ## Limitations
 
-- The Sample Store is simulated. Uploads work for any store, one month at a time, but the template is generic: a specific system's export may need its columns renamed to match.
+- The Sample Store is simulated. Uploads work for any store, one month at a time (the latest month in the file). Column guesses cover common retail wording; anything unusual can be set with the dropdowns, once.
 - Uploaded data is read as at the close of its latest day. Stock alerts are only as detailed as the stock counts supplied (a daily count gives "by today's close", not the hour).
-- When core sizes aren't given, they're learned from sales, which can pick the wrong sizes when sales are few. The upload page shows them so they can be checked and corrected in the template.
-- Projections assume the rest of the month keeps the same pace against plan, and are clearly labelled.
+- When core sizes aren't given, they're learned from sales, which can pick the wrong sizes when sales are few. The upload page shows them so they can be checked, and corrected in a targets file if needed.
+- Projections assume the rest of the month keeps the same pace against plan, and are clearly labelled. Targets shared out from a floor or store total, or worked out from last year or a category's own earlier pace, are estimates, and the screens say so.
 - On uploaded data, the AI chat sends the figures it looks up to DeepSeek (after asking), which suits dummy data and demos; a real-data pilot would need a provider the company approves. Each question is answered on its own (no conversation memory), and answers take roughly 5 to 30 seconds while the AI looks things up.
 - A real-data pilot would need the store's approval, and an AI provider the company approves.

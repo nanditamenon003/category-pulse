@@ -55,15 +55,26 @@ def _month_paragraph(store, day, hour, pace):
     left_out = len(pace) - len(judged)
     note = (f" ({left_out} {'category' if left_out == 1 else 'categories'} with nothing to judge by "
             f"{'is' if left_out == 1 else 'are'} left out.)" if left_out else "")
+    # What the month is measured against, in words: its target, or last year, or its own early pace.
+    sources = {p.get("target_source") or "target" for p in judged}
+    if sources == {"last year"}:
+        goal = f"last year's {store.amount(target)}"
+    elif sources == {"own pace"}:
+        goal = f"about {store.amount(target)} at the pace the month started with"
+    else:
+        estimated = "" if sources == {"target"} else " (partly estimated)"
+        goal = f"its {store.amount(target)} target{estimated}"
     if finished:
         result = sold / target * 100 if target else 0
-        return (f"{moment} ({weekday}), {when}. The store sold {store.amount_of(sold)} against its "
-                f"{store.amount(target)} target ({result:.0f}%).{note}")
+        return (f"{moment} ({weekday}), {when}. The store sold {store.amount_of(sold)} against "
+                f"{goal} ({result:.0f}%).{note}")
     pct = (sold - expected) / expected * 100 if expected else 0
     standing = "right on pace" if abs(pct) < 3 else f"{abs(pct):.0f}% {'ahead' if pct > 0 else 'behind'}"
+    finish = (f"near {store.amount(projected)} of {goal}" if sources == {"target"}
+              else f"near {store.amount(projected)}, against {goal}")
     return (f"{moment} ({weekday}), {when}. The store has sold {store.amount_of(sold)} against about "
-            f"{store.amount(expected)} expected, {standing}; at the current rate it would finish near "
-            f"{store.amount(projected)} of its {store.amount(target)} target.{note}")
+            f"{store.amount(expected)} expected, {standing}; at the current rate it would finish "
+            f"{finish}.{note}")
 
 
 def _problems_paragraph(store, diagnoses, ideas):

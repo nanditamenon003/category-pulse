@@ -141,19 +141,19 @@ def feature_checklist(store):
     features = [
         ("Month-to-date pace and status for every category", True, ""),
         ("Contribution report and end-of-day summary", True, ""),
-        ("Rupee values, and pace in rupees", store.has_value, "add Value to Sales"),
-        ("Step through the day hour by hour", store.hourly, "add Hour to Sales"),
+        ("Rupee values, and pace in rupees", store.has_value, "include sales values (₹)"),
+        ("Step through the day hour by hour", store.hourly, "include sale times"),
         ("Broken size runs and core sizes", store.has_sizes and store.has_stock,
-         "add Size to Sales and Stock" if store.has_stock else "add a Stock sheet with sizes"),
-        ("Stock problems and last-piece alerts", store.has_stock, "add a Stock sheet"),
+         "include sizes in sales and stock" if store.has_stock else "upload a stock report with sizes"),
+        ("Stock problems and last-piece alerts", store.has_stock, "upload a stock report"),
         ("Deliveries and usual stock levels", store.has_stock_history,
          "count stock on more than one day"),
         ("Missed deliveries and run-out warnings", store.has_stock_history and store.delivery_weekday is not None,
-         "add a Delivery day in Settings" if store.has_stock_history else "daily stock counts and a Delivery day in Settings"),
+         "choose a delivery day" if store.has_stock_history else "daily stock counts and a delivery day"),
         ("Fewer visitors or fewer buyers?", has_bills_and_visitors,
-         "add a Visitors sheet" + ("" if store.has_transactions else " and Bills to Sales")),
-        ("Tomorrow's busy hours and floor split", store.has_visitor_hours, "add visitors by hour"),
-        ("Loyalty tier targeting at the till", store.has_loyalty, "add a Loyalty sheet"),
+         "upload visitor counts" + ("" if store.has_transactions else ", with bill numbers in your sales")),
+        ("Tomorrow's busy hours and floor split", store.has_visitor_hours, "upload visitors by hour"),
+        ("Loyalty tier targeting at the till", store.has_loyalty, "upload loyalty tier figures"),
     ]
     return [(name, on, "" if on else hint) for name, on, hint in features]
 

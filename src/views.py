@@ -17,6 +17,7 @@ import streamlit as st
 
 import account
 import agent
+import smart_import
 import storage
 import tour
 import upload
@@ -63,6 +64,7 @@ from ui import (
     stock_health_at,
     time_label,
     today_at,
+    yardstick,
     zones_at,
 )
 
@@ -87,15 +89,15 @@ STOCK_VERDICT = {
 def _not_in_data(what, add):
     """A plain note where a section needs data the store's upload didn't include."""
     html_block(f'<div class="cp-panel"><p><b>Not in your data:</b> {esc(what)}. To see this, '
-               f'{esc(add)} (the Your data page has the template).</p></div>')
+               f'{esc(add)} on the Your data page.</p></div>')
 
 
 # --- Welcome guide and empty pages ---------------------------------------------------------
 
 WELCOME_STEPS = [
     ("Bring in your numbers",
-     "Fill in the Excel template with your monthly targets and your sales. Stock and visitor counts "
-     "are optional, and each one adds more."),
+     "Upload your sales as your till system exports them. Targets, stock and visitor counts are "
+     "optional, and each one adds more."),
     ("See what needs action",
      "Every category gets a status against its monthly target, and the ones genuinely behind come "
      "first, so you know where to look."),
@@ -219,12 +221,18 @@ def _problem_row(p, diag):
         f'{pill(p["status"])}{cause_chip(diag["cause"])}'
         f'<div class="cp-row-name">{esc(p["category"])}</div>'
         f'{progress_bar(p["units_sold_so_far"], p["monthly_target"], p["expected_units_by_now"])}'
-        f'<div class="cp-small">{esc(s.amount(p["units_sold_so_far"]))} of {esc(s.amount(p["monthly_target"]))} · '
+        f'<div class="cp-small">{esc(s.amount(p["units_sold_so_far"]))} of {esc(s.amount(p["monthly_target"]))} '
+        f'{esc(_yardstick_note(p))}· '
         f'{abs(p["pct_vs_pace"]):.0f}% {"behind" if p["pct_vs_pace"] < 0 else "ahead of"} pace · '
         f'{esc(_needs_text(p))}</div>'
         f'<div class="cp-row-text">{esc(evidence)}</div>'
         f'</div><div class="cp-chev">&rsaquo;</div></div>'
     )
+
+
+def _yardstick_note(p):
+    """'(last year) ' when a category isn't measured against its own target; '' when it is."""
+    return "" if p.get("target_source") in (None, "target") else f"({yardstick(p)}) "
 
 
 def _when_dropped(alert):
@@ -254,7 +262,7 @@ def _compact_row(tone, title, text):
 def today_page():
     if _no_data("Today", "Your store at a glance will show here",
                 "How the month is going against target, which categories need action and why, and "
-                "how today is going. Upload your targets and sales to start."):
+                "how today is going. Upload your sales to start."):
         return
     hour = current_hour()
     s = current_store()
@@ -335,7 +343,7 @@ def today_page():
                          f"Open {p['category']}"):
                 category_dialog(p["category"])
 
-    html_block(heading("Today so far, by line", "units sold today / expected by now")
+    html_block(heading("Today so far, by line", f"{s.measure_label} sold today / expected by now")
                + grid(line_card(t) for t in lines_today))
 
 
@@ -381,12 +389,15 @@ def _why_tab(p, diag):
                    + "</div>")
     else:
         html_block('<div class="cp-kpis">'
-                   + kpi_card("Sold this month", a(p["units_sold_so_far"]), f"of {a(p['monthly_target'])} target")
+                   + kpi_card("Sold this month", a(p["units_sold_so_far"]), f"of {a(p['monthly_target'])} {yardstick(p)}")
                    + kpi_card("Expected by now", a(p["expected_units_by_now"]),
                               f"{p['pct_vs_pace']:+.0f}% vs pace")
                    + kpi_card("Selling per day", a(p["actual_units_per_day"], per_day=True),
                               "the month is over" if p["month_finished"] else
-                              f"needs {a(p['needed_units_per_day'], per_day=True)}/day to hit target")
+                              f"needs {a(p['needed_units_per_day'], per_day=True)}/day "
+                              + {"last year": "to match last year",
+                                 "own pace": "to keep its earlier pace"}.get(p["target_source"],
+                                                                            "to hit target"))
                    + (kpi_card("Month result", a(p["units_sold_so_far"]), f"of {a(p['monthly_target'])} target")
                       if p["month_finished"] else
                       kpi_card("Month-end at this rate",
@@ -435,7 +446,7 @@ def _size_chart(stock_status):
 
 def _stock_tab(category, detail):
     if detail["stock"] is None:
-        _not_in_data("stock counts", "add a Stock sheet")
+        _not_in_data("stock counts", "upload a stock report")
         return
     s = current_store()
     health, status, history, cover = detail["health"], detail["stock"], detail["history"], detail["cover"]
@@ -475,7 +486,7 @@ def _stock_tab(category, detail):
 def _shoppers_tab(detail):
     c = detail["conversion"]
     if c is None:
-        _not_in_data("visitor and bill counts", "add a Visitors sheet and Bills to the Sales sheet")
+        _not_in_data("visitor and bill counts", "upload visitor counts, with bill numbers in your sales")
         return
     recent, baseline = c["recent_last_3_days_and_today"], c["baseline_earlier_this_month"]
     change = c["visitors_change_vs_typical_pct"]
@@ -505,7 +516,7 @@ def _sell_tab(category, detail, hour):
 
     html_block(heading("Loyalty tiers", "best responders first"))
     if detail["playbook"] is None:
-        _not_in_data("loyalty tier figures", "add a Loyalty sheet")
+        _not_in_data("loyalty tier figures", "upload loyalty tier figures")
     else:
         _tier_table(detail["playbook"])
 
@@ -678,7 +689,7 @@ def categories_page():
         for line, dept in current_store().lines.items():
             in_line = [(p, False) for p in shown if p["line"] == line]
             if in_line:
-                html_block(heading(line, dept))
+                html_block(heading(line, dept if dept != line else ""))
                 _card_row(in_line, line, diags)
     else:
         _card_row([(p, True) for p in shown], "sorted", diags)
@@ -706,7 +717,7 @@ def stock_page():
     page_title("Stock", "What's on the shelf, what's missing, and what's about to run out.")
     s = current_store()
     if not s.has_stock:
-        _not_in_data("stock counts", "add a Stock sheet with units on hand by category and size")
+        _not_in_data("stock counts", "upload a stock report with units on hand by category and size")
         return
     pace = {p["category"]: p for p in pace_at(hour)}
     problems = stock_health_at(hour)
@@ -723,7 +734,7 @@ def stock_page():
                + kpi_card("Likely to run out", f"{len(risky)}", "sizes, before the next delivery")
                + kpi_card("Next delivery", "Not set" if no_schedule else
                           (f"Day {next_delivery}" if next_delivery else "None this month"),
-                          "add a Delivery day in Settings" if no_schedule else delivery_weekday)
+                          "choose one on Your data" if no_schedule else delivery_weekday)
                + "</div>")
 
     html_block(heading("Stock problems", "tap for sizes and deliveries"))
@@ -749,7 +760,7 @@ def stock_page():
     html_block(heading("Likely to run out before the next delivery",
                        "a projection from each size's selling rate over the last 7 days"))
     if no_schedule:
-        _not_in_data("the weekday deliveries arrive", "add a Delivery day in the Settings sheet")
+        _not_in_data("the weekday deliveries arrive", "choose a delivery day")
     elif not risky:
         html_block('<div class="cp-panel"><p>No size looks likely to run out before the next '
                    'delivery.</p></div>')
@@ -810,7 +821,7 @@ def floor_page():
                                   "tomorrow.")
     s = current_store()
     if not s.has_footfall:
-        _not_in_data("visitor counts", "add a Visitors sheet with visitors per floor, by day or hour")
+        _not_in_data("visitor counts", "upload visitor counts per floor, by day or hour")
         return
     zones = zones_at(hour)
 
@@ -829,13 +840,13 @@ def floor_page():
 
     if not s.has_transactions:
         _not_in_data("bill counts, needed to tell fewer visitors from fewer buyers",
-                     "add Bills to the Sales sheet")
+                     "include bill numbers or bill counts in your sales")
     else:
         _visitors_vs_buyers(zones)
 
     if not s.has_visitor_hours:
         _not_in_data("visitors by hour, needed for tomorrow's busy hours",
-                     "add an Hour column to the Visitors sheet")
+                     "upload visitor counts by hour")
         return
     if s.today_day >= s.days_in_month:
         return
@@ -914,7 +925,7 @@ def sell_page():
 
     html_block(heading("Loyalty tier playbook", "pick any category"))
     if not current_store().has_loyalty:
-        _not_in_data("loyalty tier figures", "add a Loyalty sheet")
+        _not_in_data("loyalty tier figures", "upload loyalty tier figures")
         return
     options = list(ideas) + [c for c in current_store().categories if c not in ideas]
     chosen = st.selectbox("Category", options, key="sell_category", label_visibility="collapsed")
@@ -1006,38 +1017,195 @@ def summary_page():
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-def _read_upload(files):
-    """Reads uploaded files into a store (or a plain error) and keeps the result for this session."""
+NOT_USED = "Not used"
+ROLE_CHOICES = ["sales", "stock", "targets", "visitors", "loyalty", "settings", "skip"]
+
+
+def _reading(files, layouts=None):
+    """Finds the tables in uploaded files, guessing what each is. The upload page can change the guesses."""
     try:
-        store, notes = upload.read_upload(files)
-        st.session_state["upload_result"] = {"ok": True, "store": store, "notes": notes, "files": files}
+        tables, notes = smart_import.find_tables(files, layouts)
     except StoreDataError as e:
-        st.session_state["upload_result"] = {"ok": False, "problems": e.problems}
+        return {"files": files, "tables": [], "notes": [], "ok": False, "problems": e.problems}
+    if not tables:
+        return {"files": files, "tables": [], "notes": notes, "ok": False, "problems": [
+            "No tables were found in the file. It needs at least your sales: a row of headings (like "
+            "Date, Category and Units), then one row per sale."]}
+    return {"files": files, "tables": tables, "notes": notes}
 
 
-def _feature_row(name, on, hint):
-    badge = '<span class="cp-pill green">On</span>' if on else '<span class="cp-pill neutral">Off</span>'
-    extra = f' <span class="cp-small">({esc(hint)})</span>' if hint else ""
-    return f'<div class="cp-term">{badge} {esc(name)}{extra}</div>'
+def _file_settings(tables):
+    """Store name, delivery day and sale days from a Settings sheet, if the upload has one."""
+    settings = {}
+    for t in tables:
+        if t["role"] == "settings":
+            try:
+                settings.update(smart_import._settings(t["df"]))
+            except StoreDataError:
+                pass
+    return settings
+
+
+def _read_upload(files):
+    """Reads newly uploaded files, and fills the page's details in from the file's Settings."""
+    result = _reading(files, st.session_state.get("layouts"))
+    _fill_details(result)
+    st.session_state["upload_result"] = result
+
+
+def _fill_details(result):
+    """The page's details (store name, delivery day, sale days) start from the file's Settings."""
+    settings = _file_settings(result["tables"])
+    st.session_state["up_name"] = settings.get("name", "")
+    delivery = settings.get("delivery_weekday")
+    st.session_state["up_delivery"] = WEEKDAY_NAMES[delivery] if delivery is not None else NOT_SET
+    st.session_state["up_sale_days"] = ", ".join(str(d) for d in settings.get("sale_days", []))
+    st.session_state["up_target_units"] = None
+    st.session_state["up_target_value"] = None
+
+
+NOT_SET = "No fixed day"
+
+
+def _upload_extras():
+    """Details typed on the upload page -> (extras for smart_import, problems)."""
+    extras, problems = {}, []
+    name = (st.session_state.get("up_name") or "").strip()
+    if name:
+        extras["name"] = name
+    delivery = st.session_state.get("up_delivery")
+    if delivery and delivery != NOT_SET:
+        extras["delivery_weekday"] = WEEKDAY_NAMES.index(delivery)
+    sale_days = (st.session_state.get("up_sale_days") or "").strip()
+    if sale_days:
+        try:
+            extras["sale_days"] = smart_import.sale_day_numbers(sale_days)
+        except StoreDataError as e:
+            problems += e.problems
+    for key, extra in (("up_target_units", "store_target_units"), ("up_target_value", "store_target_value")):
+        if st.session_state.get(key):
+            extras[extra] = st.session_state[key]
+    return extras, problems
+
+
+def _build_upload(result):
+    """(Re)builds the store when the choices or details have changed since the last build."""
+    if not result["tables"]:
+        return
+    extras, problems = _upload_extras()
+    signature = repr([(t["role"], sorted(t["mapping"].items())) for t in result["tables"]]) + repr(extras)
+    if result.get("signature") == signature:
+        return
+    result["signature"] = signature
+    if problems:
+        result.update(ok=False, store=None, problems=problems)
+        return
+    try:
+        with st.spinner("Working out your store..."):
+            store, more, keep = upload.build(result["tables"], extras)
+        result.update(ok=True, store=store, build_notes=more, keep=keep, problems=[])
+    except StoreDataError as e:
+        result.update(ok=False, store=None, problems=e.problems)
+
+
+def _table_editor(i, t, upload_key):
+    """What one table is, and what each of its columns holds, as the person can change them."""
+    role = st.selectbox(f"What's in {t['label']}?", ROLE_CHOICES, index=ROLE_CHOICES.index(t["role"]),
+                        format_func=lambda r: smart_import.ROLES[r], key=f"role_{upload_key}_{i}")
+    if role != t["role"]:
+        t["role"] = role
+        t["mapping"] = smart_import.guess_columns(role, t["columns"], t["df"])
+        t.pop("shown", None)
+    if role in ("skip", "settings"):
+        return
+    # The editor always starts from the same rows (what was first shown for this role); the
+    # person's changes are kept by the editor itself.
+    shown = t.setdefault("shown", dict(t["mapping"]))
+    labels = {field: label for field, label, _ in smart_import.FIELDS[role]}
+    by_label = {label: field for field, label in labels.items()}
+    rows = pd.DataFrame({
+        "Column in your file": t["columns"],
+        "Examples": [", ".join(t["examples"][c]) for c in t["columns"]],
+        "Used as": [labels.get(shown.get(c), NOT_USED) for c in t["columns"]],
+    })
+    edited = st.data_editor(
+        rows, hide_index=True, width="stretch", key=f"cols_{upload_key}_{i}_{role}",
+        disabled=["Column in your file", "Examples"],
+        column_config={"Used as": st.column_config.SelectboxColumn(
+            "Used as", options=[NOT_USED] + list(labels.values()), required=True, width="medium")},
+    )
+    t["mapping"] = {c: by_label.get(used) for c, used in zip(t["columns"], edited["Used as"])}
+
+
+def _how_we_read_it(result, upload_key):
+    """Step 2: what each table and column was read as, with dropdowns to put it right."""
+    tables = result["tables"]
+    summary = " · ".join(f"{smart_import.ROLES[t['role']]}: {t['label']} ({t['rows']:,} rows)"
+                         for t in tables if t["role"] not in ("skip",))
+    html_block(_step_heading(2, "Check how we read it", "change anything that's wrong")
+               + f'<div class="cp-small" style="margin:0 0 6px">{esc(summary)}</div>')
+    with st.expander("See and change what each column is used for",
+                     expanded=bool(result.get("problems"))):
+        html_block('<div class="cp-small">Only the columns marked as used are kept. Anything else '
+                   'in your file (customer names, phone numbers, prices) is left out and never '
+                   'saved. Your choices are remembered for next time.</div>')
+        for i, t in enumerate(tables):
+            _table_editor(i, t, upload_key)
+    has_targets = any(t["role"] == "targets" for t in tables)
+    with st.expander("A few details (optional)", expanded=not has_targets):
+        if not has_targets:
+            html_block('<div class="cp-small"><b>No targets in your file.</b> If you know the store\'s '
+                       'target for the month, type it in and it\'s shared across categories by how '
+                       'they usually sell. If not, each category is compared with last year\'s sales '
+                       'when your file has them, or else with its own pace earlier in the month.</div>')
+            cols = st.columns(2)
+            cols[0].number_input("Store target for the month (₹)", min_value=0, step=100000,
+                                 value=None, key="up_target_value", placeholder="e.g. 5000000")
+            cols[1].number_input("Store target for the month (units)", min_value=0, step=100,
+                                 value=None, key="up_target_units", placeholder="e.g. 4000")
+        st.text_input("Store name", key="up_name", placeholder="Your store")
+        cols = st.columns(2)
+        cols[0].selectbox("Delivery day", [NOT_SET] + WEEKDAY_NAMES, key="up_delivery",
+                          help="The weekday new stock usually arrives: used to spot missed deliveries "
+                               "and sizes that will run out before the next one.")
+        cols[1].text_input("Sale days this month", key="up_sale_days", placeholder="e.g. 13, 27",
+                           help="Day numbers, separated by commas. Sale days are busier, so they're "
+                                "judged separately from ordinary days.")
+
+
+def _judged_by(store):
+    """How each measure's targets were worked out, in plain words."""
+    lines = []
+    for measure in store.measures:
+        notes = store.target_notes.get(measure, [])
+        label = "In rupees" if measure == "value" else "In units"
+        if notes:
+            lines.append(f"<b>{label}:</b> " + " ".join(esc(n) for n in notes))
+        else:
+            lines.append(f"<b>{label}:</b> every category has its own target.")
+    return "".join(f'<p class="cp-small">{line}</p>' for line in lines)
 
 
 def _upload_preview(store, notes):
     html_block(_step_heading(3, "Check it", "before every page switches to it"))
     lines, floors = len(store.lines), len(store.departments)
+    units = int(store.sales["units_sold"].sum())
+    value_line = f"worth {store.for_measure('value').amount(store.sales['value'].sum())}" \
+        if store.has_value else "no rupee values in the file"
     html_block('<div class="cp-kpis">'
                + kpi_card("Month", f"{store.month_name} {store.month_start.year}",
                           f"data up to day {store.today_day} ({store.date(store.today_day):%a %d %b})")
                + kpi_card("Categories", f"{len(store.categories)}",
-                          f"in {lines} line{'s' if lines != 1 else ''} on {floors} floor{'s' if floors != 1 else ''}")
-               + kpi_card("Units sold so far", f"{int(store.sales['units_sold'].sum()):,}",
-                          f"against {sum(t for t in store.targets.values() if t):,} for the month"
-                          if any(store.targets.values()) else "no unit targets yet")
+                          (f"in {lines} line{'s' if lines != 1 else ''} on " if set(store.lines) != set(store.departments)
+                           else "on ") + f"{floors} floor{'s' if floors != 1 else ''}")
+               + kpi_card("Sold so far", f"{units:,} units", value_line)
                + "</div>")
 
     if store.warnings:
         html_block('<div class="cp-alert amber"><div class="cp-alert-title">Check these before you continue'
                    '</div><ul>' + "".join(f"<li>{esc(w)}</li>" for w in store.warnings) + "</ul></div>")
 
+    html_block(heading("How each category is judged") + f'<div class="cp-panel">{_judged_by(store)}</div>')
     html_block(heading("What your data switches on")
                + '<div class="cp-panel">'
                + "".join(_feature_row(*f) for f in upload.feature_checklist(store))
@@ -1048,10 +1216,9 @@ def _upload_preview(store, notes):
     if store.has_sizes:
         with st.expander("Check the core sizes"):
             html_block('<div class="cp-small">Core sizes are the ones most shoppers need: when they run '
-                       'out, a category can\'t sell even while the shelf looks full. Any left blank in '
-                       'the Targets sheet were worked out from sales on days every size was in stock. '
-                       'With only a few sales that can pick the wrong ones, so check them and type the '
-                       'right ones into the template if needed.</div>')
+                       'out, a category can\'t sell even while the shelf looks full. Unless your targets '
+                       'list them, they\'re worked out from sales on days every size was in stock. With '
+                       'only a few sales that can pick the wrong ones, so check them.</div>')
             st.dataframe(pd.DataFrame([
                 {"Category": c, "Sizes": ", ".join(store.sizes[c]),
                  "Core sizes": ", ".join(store.core_sizes[c]) or "none yet (no sales)"}
@@ -1063,11 +1230,17 @@ def _upload_preview(store, notes):
         return
     if storage.is_configured():
         html_block('<div class="cp-small" style="margin:8px 0">Showing it also saves it to your account, '
-                   'encrypted, so it\'s here next time you sign in.</div>')
+                   'encrypted, so it\'s here next time you sign in. Only the columns in use are '
+                   'saved.</div>')
     if st.button("Show my store", key="show_upload", type="primary", icon=":material/arrow_forward:"):
+        result = st.session_state["upload_result"]
+        layouts = dict(st.session_state.get("layouts") or {})
+        for t in result["tables"]:
+            layouts[smart_import.layout_key(t["columns"])] = {"role": t["role"], "mapping": t["mapping"]}
+        st.session_state["layouts"] = dict(list(layouts.items())[-20:])
         st.session_state["my_store"] = store
         st.session_state["tour_step"] = None
-        _save_to_account(store, st.session_state["upload_result"].get("files", []))
+        _save_to_account(store, result.get("keep", []), st.session_state["layouts"])
         st.switch_page(tour.PAGES["Today"])
 
 
@@ -1081,32 +1254,40 @@ def load_saved_store():
             saved = storage.load(person)
             if saved is None:
                 return
-            store, notes = upload.read_upload(saved["files"])
+            result = _reading(saved["files"], saved["layouts"])
+            _fill_details(result)
+            _build_upload(result)
     except storage.StorageError as e:
         st.session_state["save_note"] = str(e)
         return
-    except StoreDataError:
-        st.session_state["save_note"] = ("Your saved file couldn't be read with this version of the app. "
-                                         "Please upload it again.")
+    if not result.get("ok"):
+        st.session_state["save_note"] = ("Your saved data couldn't be read with this version of the app. "
+                                         "Please upload your file again.")
         return
-    st.session_state["my_store"] = store
-    st.session_state["upload_result"] = {"ok": True, "store": store, "notes": notes,
-                                         "files": saved["files"]}
+    st.session_state["layouts"] = saved["layouts"]
+    st.session_state["my_store"] = result["store"]
+    st.session_state["upload_result"] = result
     st.session_state["saved_at"] = saved["saved_at"]
 
 
-def _save_to_account(store, files):
-    """Saves the uploaded files, encrypted, to the signed-in person's account (if saving is on)."""
+def _save_to_account(store, files, layouts=None):
+    """Saves the columns in use, encrypted, to the signed-in person's account (if saving is on)."""
     st.session_state.pop("save_note", None)
     st.session_state.pop("saved_at", None)
     person = account.person_id()
     if not (storage.is_configured() and person and files):
         return
     try:
-        storage.save(person, files, store.name)
+        storage.save(person, files, store.name, layouts)
         st.session_state["saved_at"] = pd.Timestamp.now(tz="UTC").isoformat()
     except storage.StorageError as e:
         st.session_state["save_note"] = str(e)
+
+
+def _feature_row(name, on, hint):
+    badge = '<span class="cp-pill green">On</span>' if on else '<span class="cp-pill neutral">Off</span>'
+    extra = f' <span class="cp-small">({esc(hint)})</span>' if hint else ""
+    return f'<div class="cp-term">{badge} {esc(name)}{extra}</div>'
 
 
 def _delete_my_data():
@@ -1130,8 +1311,8 @@ def _step_heading(number, text, sub=""):
 def your_data_page():
     guest = account.is_guest()
     mine = st.session_state.get("my_store")
-    page_title("Your data", "Bring in your store's month in three steps: download the template, fill "
-                            "it in, and upload it.")
+    page_title("Your data", "Upload your sales as your till system exports them. Stock, targets and "
+                            "visitor counts are optional: each one switches on more of the app.")
 
     if guest:
         html_block('<div class="cp-panel"><p>You\'re looking around the <b>Sample Store</b>: a made-up '
@@ -1146,7 +1327,7 @@ def your_data_page():
         html_block(heading("Your store")
                    + f'<div class="cp-panel"><p><b>{esc(mine.name)}</b>: {esc(mine.month_name)} '
                      f'{mine.month_start.year}, up to day {mine.today_day}. Every page is showing it. '
-                     f'{esc(saved)} To replace it, upload a new file below.</p>'
+                     f'{esc(saved)} To replace it, upload new files below.</p>'
                      f'<p class="cp-small">{esc(privacy_promise())}</p></div>')
         if st.session_state.get("delete_note"):
             html_block(f'<div class="cp-small">{esc(st.session_state.pop("delete_note"))}</div>')
@@ -1155,49 +1336,58 @@ def your_data_page():
             st.rerun()
     else:
         name = account.first_name()
-        html_block(f'<div class="cp-panel"><p><b>Welcome{", " + esc(name) if name else ""}.</b> Three steps '
-                   'and every page fills in with your store\'s numbers.</p>'
+        html_block(f'<div class="cp-panel"><p><b>Welcome{", " + esc(name) if name else ""}.</b> Upload '
+                   'your sales and every page fills in with your store\'s numbers.</p>'
                    f'<p class="cp-small">{esc(privacy_promise())}</p></div>')
         if st.button("Take the 2-minute tour first", key="data_tour", icon=":material/tour:",
                      type="tertiary"):
             tour.start()
 
-    html_block(_step_heading(1, "Download the template")
-               + '<div class="cp-small" style="margin:0 0 8px">One Excel file with a sheet for each kind '
-                 'of data. <b>Targets</b> and <b>Sales</b> are required; <b>Stock</b>, <b>Visitors</b>, '
-                 '<b>Loyalty</b> and <b>Settings</b> are optional, and each one switches on more of the '
-                 'app. The Read me sheet explains every column.</div>')
-    st.download_button("Download the template", data=upload.template_bytes(), mime=XLSX,
-                       file_name="category-pulse-template.xlsx", icon=":material/download:")
-
+    html_block(_step_heading(1, "Upload your sales", "Excel or CSV, as your system exports it")
+               + '<div class="cp-small" style="margin:0 0 8px">One row per bill line or per day, it '
+                 'doesn\'t matter: all it needs is a <b>date</b>, a <b>category</b> and <b>units</b> '
+                 'sold. Rupee values, sizes, times and bill numbers add more. You can add other files '
+                 'too: a stock report, your targets (per category, per floor or for the store; in units '
+                 'or ₹), visitor counts. Don\'t have targets? The app compares with last year or with '
+                 'each category\'s own recent pace.</div>')
     if guest:
+        st.download_button("See the file layout (Excel template)", data=upload.template_bytes(), mime=XLSX,
+                           file_name="category-pulse-template.xlsx", icon=":material/download:",
+                           type="tertiary")
         return
 
-    html_block(_step_heading(2, "Fill it in and upload it",
-                             "the Excel file, or one CSV file per sheet, e.g. sales.csv"))
-    files = st.file_uploader("Upload your data", type=["xlsx", "csv"], accept_multiple_files=True,
+    files = st.file_uploader("Upload your data", type=["xlsx", "xlsm", "csv"], accept_multiple_files=True,
                              key="upload_files", label_visibility="collapsed")
+    st.download_button("No export handy? Use the Excel template", data=upload.template_bytes(), mime=XLSX,
+                       file_name="category-pulse-template.xlsx", icon=":material/download:",
+                       type="tertiary")
+    upload_key = None
     if files:
         data = [(f.name, f.getvalue()) for f in files]
-        fingerprint = hashlib.sha1(b"".join(d for _, d in data)).hexdigest()
-        if st.session_state.get("upload_key") != fingerprint:  # read each new upload once
-            st.session_state["upload_key"] = fingerprint
+        upload_key = hashlib.sha1(b"".join(d for _, d in data)).hexdigest()[:10]
+        if st.session_state.get("upload_key") != upload_key:  # read each new upload once
+            st.session_state["upload_key"] = upload_key
             with st.spinner("Reading your file..."):
                 _read_upload(data)
 
     result = st.session_state.get("upload_result")
     if result is None:
         return
-    if not result["ok"]:
+    if result["tables"]:
+        _how_we_read_it(result, upload_key or "saved")
+        _build_upload(result)
+    if not result.get("ok"):
         problems = result["problems"]
         title = ("That file can\'t be used yet" if len(problems) == 1
                  else f"{len(problems)} things to fix before this file can be used")
+        fix = ("Change what a column is used for in step 2, or fix the file and upload it again."
+               if result["tables"] else "Fix the file and upload it again.")
         html_block(f'<div class="cp-alert"><div class="cp-alert-title">{title}</div><ul>'
                    + "".join(f"<li>{esc(p)}</li>" for p in problems)
                    + "</ul></div>"
-                   + '<div class="cp-small">Fix them in the file and upload it again.</div>')
+                   + f'<div class="cp-small">{fix}</div>')
         return
-    _upload_preview(result["store"], result["notes"])
+    _upload_preview(result["store"], result["notes"] + result.get("build_notes", []))
 
 # --- Guide page ------------------------------------------------------------------------------
 
@@ -1214,8 +1404,10 @@ GUIDE_STATUSES = [
 ]
 
 GUIDE_TERMS = [
-    ("Pace", "Units sold so far compared with what the monthly target says should have sold by "
-             "now. Month-to-date, because targets are monthly."),
+    ("Pace", "Sales so far (in units or rupees: use the switch at the top) compared with what the "
+             "monthly target says should have sold by now. Month-to-date, because targets are "
+             "monthly. Without a target, a category is measured against last year's sales or its own "
+             "pace earlier in the month, and the page says so."),
     ("Needs per day", "How many units a day the category must sell from now on to hit its "
                       "target, next to what it's actually selling."),
     ("Month-end at this rate", "A projection, not a result: where the month lands if the rest of it "
@@ -1260,12 +1452,15 @@ def guide_page():
                + "</div>")
 
     html_block(heading("Using your own store's data")
-               + '<div class="cp-panel"><p>The Your data page has an Excel template. Fill in your '
-                 'targets and sales (and, if you have them, stock counts, visitor counts and loyalty '
-                 'figures), upload it, and every page switches to your store. The more you add, the '
-                 'more the app can tell you; it says plainly what\'s missing rather than guessing. To '
-                 'keep your data private, the AI chat asks before it sends any of your figures to its AI '
-                 'service.</p></div>')
+               + '<div class="cp-panel"><p>On the Your data page, upload your sales as your till '
+                 'system exports them, plus anything else you have: a stock report, targets (per '
+                 'category, per floor or for the whole store, in units or rupees), visitor counts. '
+                 'The app works out what each column is and shows you, so you can put anything right. '
+                 'Every page then switches to your store. The more you add, the more the app can tell '
+                 'you; it says plainly what\'s missing rather than guessing. Without targets, each '
+                 'category is compared with last year or with its own recent pace. To keep your data '
+                 'private, only the columns in use are kept, and the AI chat asks before it sends any '
+                 'of your figures to its AI service.</p></div>')
 
     html_block(heading("How the AI chat works")
                + '<div class="cp-panel"><p>Ask Category Pulse answers by looking up the store\'s '

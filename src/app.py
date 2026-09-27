@@ -6,9 +6,9 @@ Run from the project folder with:  streamlit run src/app.py
 Layers:
   0. The welcome page (account.py) for anyone not signed in: log in, create
      an account, or look around as a guest.
-  1. The frame (this file): name, which store's data is showing, time button,
-     account menu, top menu, the guided tour card, and a floating "Ask
-     Category Pulse" button.
+  1. The frame (this file): name, which store's data is showing, a Units / ₹
+     switch, time button, account menu, top menu, the guided tour card, and a
+     floating "Ask Category Pulse" button.
   2. Pages (views.py): Today, Categories, Stock, Floor and staff, Sell,
      Summary, Your data, Guide.
   3. Pop-ups on top of a page: the welcome guide, category details and the chat.
@@ -73,6 +73,12 @@ with st.container(horizontal=True, horizontal_alignment="distribute", vertical_a
         label = store.name + " · uploaded data"
     html_block(f'<span class="cp-brand">Category Pulse</span><span class="cp-datalabel">{esc(label)}</span>')
     with st.container(horizontal=True, gap="small", vertical_alignment="center", width="content"):
+        if store is not None and len(store.measures) > 1 and st.session_state.get("tour_step") is None:
+            st.segmented_control(
+                "Judge pace in", options=store.measures, key="measure", label_visibility="collapsed",
+                format_func=lambda m: "₹" if m == "value" else "Units",
+                help="Judge every category's pace against its target in units sold, or in rupees.",
+            )
         if store is not None and store.hourly:
             hour = current_hour()
             with st.popover(f"{today_label()}, {time_label(hour)}", icon=":material/schedule:"):

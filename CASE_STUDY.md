@@ -27,7 +27,7 @@ Category Pulse sits on top of the store's existing system and answers four quest
 
 A manager can also just ask a question. An AI assistant answers it by looking up the real numbers, and a "How I got this" panel shows every lookup it made.
 
-And it isn't tied to the Sample Store it comes with. A manager can fill in an Excel template with their own store's month (targets and sales at minimum) and upload it, and every page switches to their numbers.
+And it isn't tied to the Sample Store it comes with. A manager can upload their store's own sales export, as the till system produces it, and every page switches to their numbers.
 
 ## 3. How it works (in plain terms)
 
@@ -35,7 +35,7 @@ And it isn't tied to the Sample Store it comes with. A manager can fill in an Ex
 - **Rules that do the analysis.** Small, readable functions calculate pace, check stock health, trace deliveries, compare visitors with buyers, find peak hours and suggest cross-sells. All the tunable business rules (targets, the 15% threshold, stock rules) live in one settings file.
 - **An AI assistant with tools.** The assistant can't see the data directly. It has to call those same functions ("tools") to get numbers, and its instructions forbid estimating. That's what keeps its answers grounded.
 - **A web app for the floor.** Separate pages for Today, Categories, Stock, Floor and staff, Sell and Summary, built phone-first. Tapping any category opens a pop-up with the why, the stock by size, the shoppers and what to sell. The chat opens in its own window. A time button steps through the day, and a guided tour and a plain-English guide help first-time visitors.
-- **Any store's data.** Every calculation reads from one "store" object (its lines, targets, sizes, calendar and data) instead of fixed settings. The Sample Store is one such store, and an uploaded Excel template builds another. A test runs the whole engine on a made-up store that looks nothing like the Sample Store (different lines, a different month and opening hours, stock counted once a day), and it still finds the problems planted in it.
+- **Any store's data.** Every calculation reads from one "store" object (its lines, targets, sizes, calendar and data) instead of fixed settings. The Sample Store is one such store, and any uploaded export builds another. A test runs the whole engine on a made-up store that looks nothing like the Sample Store (different lines, a different month and opening hours, stock counted once a day), and it still finds the problems planted in it.
 
 ## 4. Key design decisions
 
@@ -53,11 +53,13 @@ And it isn't tied to the Sample Store it comes with. A manager can fill in an Ex
 
 **No machine-learning model, yet.** A trained forecasting model sounds impressive. But on simulated data it would only re-learn the simulator's own rules, and one store's month is far too little data for a model to beat simple methods. So the projections are plain and explained ("if the current rate continues...") and always labelled. With a month of data, a simple run rate is hard to beat, and it's easy to check. Machine learning is future work: only with real data, only after back-testing the simple method on real months, and only if a model clearly beats it.
 
-**A layer on top, not a new system.** The store already has a system that records every sale and stock movement. Category Pulse doesn't replace it or ask anyone to type data in. Instead it reads the reports the manager already downloads: the upload template matches common column names (for example "Qty" for units, and day-first dates), so an export needs little tidying.
+**A layer on top, not a new system.** The store already has a system that records every sale and stock movement. Category Pulse doesn't replace it or ask anyone to type data in. Instead it reads the reports the manager already downloads, as they come. Real exports rarely match a template: a report title on top, one row per bill line, "Qty" and "Net Amt", the date and time in one cell, customer columns, a Grand Total row, several months at once. The app works all of that out, shows how it read each column with a dropdown to put anything right, and remembers the choices for next month. Only the columns it uses are kept, so customer names and phone numbers in an export are never stored.
 
 **A first visit that teaches, then gets out of the way.** People sign in (Auth0 handles accounts and passwords, so the app never sees one) and meet a three-step welcome guide that ends with a choice: a 2-minute tour on sample data, or skip straight to uploading. Until their own data is in, each page says what will appear there instead of showing someone else's numbers, so nobody mistakes example figures for their own. Guests can look around the Sample Store without an account.
 
-**Honest about missing data.** Only targets and daily sales are required. Stock counts, visitor counts, bill counts, sizes, hours and loyalty figures are all optional, and each one switches on more of the app. Before switching over, the upload page lists what the data supports and what would switch the rest on. A page that needs something missing says so ("Not in your data: stock counts") instead of guessing. When a store doesn't say which sizes are core, they're learned from sales, but only on days every size was on the shelf. Otherwise a size that has been sold out for a week looks unpopular, which would hide the very problem the check is for.
+**Works with the targets a store actually has.** Targets arrive in many forms: per category, per floor, one number for the store, in units or in rupees, or not written down at all. Floor and store targets are shared across categories by how each sold before the last week (sharing by the whole month would make every category exactly as far behind as its floor, hiding the one that slipped). With no target, a category is judged against last year's sales for the month, read from the same file if it goes back a year, or else against its own pace earlier in the month, so "behind" means "has slowed down". A switch judges pace in units or in rupees. Every screen names its yardstick, and estimates are labelled.
+
+**Honest about missing data.** Only sales are required: a date, a category and units. Stock counts, visitor counts, bill counts, sizes, hours and loyalty figures are all optional, and each one switches on more of the app. Before switching over, the upload page lists what the data supports and what would switch the rest on. A page that needs something missing says so ("Not in your data: stock counts") instead of guessing. When a store doesn't say which sizes are core, they're learned from sales, but only on days every size was on the shelf. Otherwise a size that has been sold out for a week looks unpopular, which would hide the very problem the check is for.
 
 **The AI asks before it sees your data.** The chat runs on a low-cost AI provider, which is fine for simulated or dummy data but not for a store's real figures without approval. So on uploaded data it first explains, in plain words, that the figures it looks up are sent to that provider, and asks for a clear yes once per visit. Its tools and instructions are built from the uploaded store itself, and tools for data the store doesn't have are left out, so it says plainly when a question can't be answered. Uploaded data is saved to the person's account so they don't re-upload every visit, but encrypted by the app before it's stored, against a one-way fingerprint of their login rather than their email; "Delete my data" removes it completely.
 
@@ -74,7 +76,7 @@ In the simulated month, the value is mostly **time**:
 What a real pilot would need:
 - the manager's and head office's approval to use real data
 - an AI provider the company approves
-- matching the store system's own export columns to the upload template (common names are already recognised)
+- a check that the store system's export is read correctly the first time (the column choices are then remembered)
 
 What would prove the idea:
 - fewer lost sales from stockouts and broken size runs

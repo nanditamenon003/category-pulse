@@ -90,14 +90,19 @@ def _request(method, settings, params=None, body=None, prefer=None):
     return response
 
 
-def save(person, files, name):
-    """Saves [(file name, bytes)] for this person, replacing anything saved before."""
+def save(person, files, name, layouts=None):
+    """
+    Saves [(file name, bytes)] for this person, replacing anything saved
+    before. `layouts` remembers how their files' columns were read, for next
+    time (smart_import.find_tables).
+    """
     settings = _settings()
     if settings is None:
         return
     packed = json.dumps({
         "name": name,
         "files": [{"name": n, "data": base64.b64encode(d).decode()} for n, d in files],
+        "layouts": layouts or {},
     }).encode()
     _request("POST", settings, prefer="resolution=merge-duplicates", body={
         "owner": _owner(settings, person),
@@ -108,7 +113,7 @@ def save(person, files, name):
 
 
 def load(person):
-    """This person's saved files and when they were saved, or None if nothing is saved."""
+    """This person's saved files, name, remembered layouts and when they were saved, or None."""
     from cryptography.fernet import InvalidToken
 
     settings = _settings()
@@ -127,7 +132,8 @@ def load(person):
     if isinstance(content, list):  # saved before the name moved inside the encryption
         content = {"name": rows[0].get("name"), "files": content}
     files = [(f["name"], base64.b64decode(f["data"])) for f in content["files"]]
-    return {"files": files, "name": content["name"], "saved_at": rows[0]["saved_at"]}
+    return {"files": files, "name": content["name"], "layouts": content.get("layouts", {}),
+            "saved_at": rows[0]["saved_at"]}
 
 
 def delete(person):
