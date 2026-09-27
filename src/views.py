@@ -27,6 +27,8 @@ from config import QUESTIONS_PER_DAY
 from forecast import CHANCE_PHRASE, GOAL_PHRASE, chance_words
 from store import WEEKDAY_NAMES, StoreDataError
 from ui import (
+    ACCENT,
+    ACCENT_LINE,
     AMBER,
     BORDER,
     GREEN,
@@ -54,6 +56,7 @@ from ui import (
     kpi_card,
     last_pieces_at,
     month_end_at,
+    month_path_at,
     plan_message_text,
     line_card,
     pace_at,
@@ -62,6 +65,7 @@ from ui import (
     playbook_for,
     requests_at,
     progress_bar,
+    range_bar,
     request_forget,
     risky_sizes_at,
     slug,
@@ -333,12 +337,18 @@ def today_page():
         month_cards = (kpi_card("Month so far", a(sold), f"of about {a(expected)} expected by now")
                        + kpi_card("Month result", a(sold), f"of the {a(target)} target"))
     else:
-        me = month_end_at(hour)
-        sub = _range_text(me, a) if me["likely"] is not None else f"target {a(target)} (a projection)"
-        if me["chance_of_target_pct"] is None and me["likely"] is not None:
-            sub += f" · target {a(target)}"
-        month_cards = (kpi_card("Month so far", a(sold), f"of about {a(expected)} expected by now")
-                       + kpi_card("Month-end at this rate", a(projected), sub))
+        path = month_path_at(hour)
+        me = path["range"]
+        if me["likely"] is None:
+            end_card = kpi_card("Month-end at this rate", a(projected), f"target {a(target)} (a projection)")
+        else:
+            chance = me["chance_of_target_pct"]
+            end_card = kpi_card(
+                "Month-end at this rate", a(me["likely"]),
+                f"likely {a(me['low'])} to {a(me['high'])}"
+                + (f" · {chance}% {CHANCE_PHRASE[me['yardstick']]}" if chance is not None else ""),
+                extra=range_bar(me, target))
+        month_cards = kpi_card("Month so far", a(sold), f"of about {a(expected)} expected by now") + end_card
     html_block('<div class="cp-kpis">'
                + month_cards
                + kpi_card("Need action", f"{len(behind)} behind", f"{len(drifting)} drifting",
@@ -349,8 +359,20 @@ def today_page():
                + "</div>")
 
     if s.today_day < s.days_in_month:
-        st.page_link(tour.PAGES["Plan"], label=f"Plan for {WEEKDAY_NAMES[s.weekday(s.today_day + 1)]} is "
-                     f"ready: focus, stock to request, busy hours", icon=":material/checklist:")
+        with st.container(key="plan_link"):
+            st.page_link(tour.PAGES["Plan"], label=f"Plan for {WEEKDAY_NAMES[s.weekday(s.today_day + 1)]} is "
+                         f"ready: what to focus on, stock to request, busy hours", icon=":material/checklist:")
+
+    if judged and not pace[0]["month_finished"]:
+        path = month_path_at(hour)
+        html_block(heading("The month so far", f"{s.measure_label} sold vs {PATH_LABEL[path['yardstick']].lower()}"))
+        html_block('<div class="cp-legend">'
+                   f'<span><i style="background:{ACCENT}"></i>Sold so far</span>'
+                   f'<span><i style="background:repeating-linear-gradient(90deg,#8A8A84 0 5px,transparent 5px 9px)">'
+                   f'</i>{PATH_LABEL[path["yardstick"]]}</span>'
+                   f'<span><i style="background:{ACCENT_LINE};height:9px"></i>Likely finish (a projection)</span>'
+                   '</div>')
+        st.altair_chart(month_chart(path, s), width="stretch")
 
     html_block(heading("Needs action now", "tap a category for the full picture"))
     if not behind:
@@ -583,6 +605,54 @@ def _tier_table(playbook):
 
 
 # --- Other pages ------------------------------------------------------------------------------
+
+PATH_LABEL = {"target": "Path to target", "last year": "Last year's month",
+              "own pace": "The month's early pace"}
+
+
+def month_chart(path, s):
+    """Running sales so far, the path to target, and a band for where the month is likely to land."""
+    sold, plan, me = path["sold"], path["plan"], path["range"]
+    today, end = len(sold), len(plan)
+    x = alt.X("day:Q", title=None, scale=alt.Scale(domain=[1, end], nice=False),
+              axis=alt.Axis(values=[1, 8, 15, 22, 29], labelExpr="'day ' + datum.value", grid=False))
+    if s.measure == "value":
+        y_axis = alt.Axis(title=None, labelExpr="datum.value >= 1e7 ? '₹' + format(datum.value / 1e7, '.1f') + ' Cr' : "
+                                                "datum.value >= 1e5 ? '₹' + format(datum.value / 1e5, '.0f') + ' L' : "
+                                                "'₹' + format(datum.value, ',')", tickCount=4)
+    else:
+        y_axis = alt.Axis(title=None, labelExpr="format(datum.value, ',')", tickCount=4)
+    y = alt.Y("value:Q", axis=y_axis)
+    tooltip = [alt.Tooltip("day:Q", title="Day"), alt.Tooltip("shown:N", title="")]
+    layers = []
+    if me["likely"] is not None:
+        band = pd.DataFrame({"day": [today, end], "low": [sold[-1], me["low"]], "high": [sold[-1], me["high"]]})
+        layers.append(alt.Chart(band).mark_area(color=ACCENT_LINE, opacity=0.9).encode(
+            x=x, y=alt.Y("low:Q", axis=y_axis), y2="high:Q"))
+    plan_df = pd.DataFrame({"day": range(1, end + 1), "value": plan,
+                            "shown": [f"{PATH_LABEL[path['yardstick']]}: {s.amount(v)}" for v in plan]})
+    sold_df = pd.DataFrame({"day": range(1, today + 1), "value": sold,
+                            "shown": [f"Sold so far: {s.amount(v)}" for v in sold]})
+    layers.append(alt.Chart(plan_df).mark_line(color="#8A8A84", strokeDash=[6, 5], strokeWidth=2).encode(
+        x=x, y=y, tooltip=tooltip))
+    layers.append(alt.Chart(sold_df).mark_line(color=ACCENT, strokeWidth=3.5).encode(x=x, y=y, tooltip=tooltip))
+    now = sold_df.tail(1).assign(label=f"Today: {s.amount(sold[-1])}")
+    layers.append(alt.Chart(now).mark_point(filled=True, size=90, color=ACCENT, stroke="#FFFFFF", strokeWidth=2,
+                                            opacity=1).encode(x=x, y=y))
+    layers.append(alt.Chart(now).mark_text(align="right", dx=-10, dy=-12, fontSize=13, fontWeight="bold",
+                                           color=TEXT).encode(x=x, y=y, text="label:N"))
+    goal = pd.DataFrame({"day": [end], "value": [path["target"]],
+                         "label": [f"{'Target' if path['yardstick'] == 'target' else 'Goal'} {s.amount(path['target'])}"]})
+    layers.append(alt.Chart(goal).mark_point(filled=True, size=40, color=TEXT, opacity=1).encode(x=x, y=y))
+    layers.append(alt.Chart(goal).mark_text(align="right", dx=-4, dy=-12, fontSize=12, color=TEXT).encode(
+        x=x, y=y, text="label:N"))
+    return alt.layer(*layers).properties(
+        height=230, padding={"left": 8, "right": 12, "top": 16, "bottom": 4}
+    ).configure_view(stroke=None, strokeWidth=0).configure_axis(
+        labelFont="Inter", labelFontSize=11, labelColor=MUTED, domainColor=BORDER, tickColor=BORDER,
+        gridColor="#EEEDE9",
+    ).configure(background=PAGE)
+
 
 def pace_chart(pace):
     rows = []
@@ -1042,7 +1112,7 @@ def plan_page():
         chance = me["chance_of_target_pct"]
         cards.append(kpi_card("Month-end", f"{a(me['low'])} to {a(me['high'])}",
                               f"{chance}% {CHANCE_PHRASE[me['yardstick']]} ({chance_words(chance)})" if chance is not None
-                              else "likely range (a projection)"))
+                              else "likely range (a projection)", extra=range_bar(me, me["target"])))
     cards.append(kpi_card("To focus on", f"{len(p['focus'])}",
                           f"{'category' if len(p['focus']) == 1 else 'categories'} behind or slipping",
                           tone="red" if any(f["status"] == "behind" for f in p["focus"]) else ""))

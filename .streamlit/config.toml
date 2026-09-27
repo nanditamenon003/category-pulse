@@ -1,7 +1,7 @@
 [theme]
 base = "light"
-# Accent for interactive elements only (buttons, links, selected states).
-primaryColor = "#3F51B5"
+# Accent for interactive elements only (buttons, links, selected states): the logo's violet.
+primaryColor = "#4F3FB7"
 backgroundColor = "#F7F7F5"
 secondaryBackgroundColor = "#FFFFFF"
 textColor = "#1A1A1A"

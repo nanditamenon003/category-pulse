@@ -77,15 +77,18 @@ def month_end_range(daily, weights_done, share_today, weight_today, weight_after
     return likely, max(sold, likely - z * sd), likely + z * sd, sd
 
 
-def get_month_end_range(category=None, line=None, day=None, hour=None, store=None):
+def get_month_end_range(category=None, line=None, day=None, hour=None, store=None, categories=None):
     """
-    Where a category, a line or the whole store (neither given) is likely to
-    finish the month: likely, low and high (the middle 80%), the target and
-    the chance of reaching it. None for "likely" when it's too early to say.
+    Where a category, a line, a list of `categories` or the whole store (none
+    given) is likely to finish the month: likely, low and high (the middle
+    80%), the target and the chance of reaching it. None for "likely" when
+    it's too early to say.
     """
     store, day, hour = resolve(store, day, hour)
     _validate_moment(store, day, hour)
-    if category is not None:
+    if categories is not None:
+        categories, subject = list(categories), "Categories with a target"
+    elif category is not None:
         categories, subject = [category], category
     elif line is not None:
         categories, subject = store.categories_in(line=line), line
@@ -146,6 +149,35 @@ def get_month_end_range(category=None, line=None, day=None, hour=None, store=Non
         chance = int(min(99, max(1, 5 * round(chance / 5)))) if 0 < chance < 100 else int(chance)
     return out | {"likely": round(likely), "low": round(low), "high": round(high),
                   "chance_of_target_pct": chance}
+
+
+def get_month_path(day=None, hour=None, store=None):
+    """
+    The month so far, for the "Month so far" chart: running sales to date and
+    the path to target (both for the categories with something to judge them
+    by), and where the month is likely to land. None if no category has one.
+    """
+    store, day, hour = resolve(store, day, hour)
+    judged = [c for c in store.categories if store.active_targets.get(c)]
+    if not judged:
+        return None
+    rows = store.sales[store.sales["category"].isin(judged)]
+    rows = rows[(rows["day"] < day) | ((rows["day"] == day) & (rows["hour"] <= hour))]
+    by_day = rows.groupby("day")[store.sold_column].sum()
+    sold, running = [], 0.0
+    for d in range(1, day + 1):
+        running += float(by_day.get(d, 0.0))
+        sold.append(round(running))
+    target = sum(store.active_targets[c] for c in judged)
+    weights = store.day_weights
+    total_weight = sum(weights.values())
+    plan, done = [], 0.0
+    for d in range(1, store.days_in_month + 1):
+        done += weights[d]
+        plan.append(round(target * done / total_weight))
+    return {"sold": sold, "plan": plan, "target": target, "measure": store.measure,
+            "yardstick": yardstick_of(store, judged),
+            "range": get_month_end_range(day=day, hour=hour, store=store, categories=judged)}
 
 
 def chance_words(pct):

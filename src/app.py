@@ -23,13 +23,15 @@ that the figures it looks up go to the AI provider, and asks for a clear yes.
 """
 
 import streamlit as st
+from PIL import Image
 
 import account
 import tour
 import views
-from ui import CSS, current_hour, esc, html_block, prepare_session, time_label, today_label
+from ui import ASSETS, CSS, current_hour, esc, html_block, logo_uri, prepare_session, time_label, today_label
 
-st.set_page_config(page_title="Category Pulse", layout="wide", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Category Pulse", page_icon=Image.open(ASSETS / "icon-128.png"), layout="wide",
+                   initial_sidebar_state="collapsed")
 st.markdown(CSS, unsafe_allow_html=True)
 
 # --- Signed out: only the welcome page -------------------------------------------------------
@@ -72,7 +74,8 @@ with st.container(horizontal=True, horizontal_alignment="distribute", vertical_a
         label = store.name + (" · walkthrough" if signed_in else "")
     else:
         label = store.name + " · uploaded data"
-    html_block(f'<span class="cp-brand">Category Pulse</span><span class="cp-datalabel">{esc(label)}</span>')
+    html_block(f'<img class="cp-logo" src="{logo_uri()}" alt=""><span class="cp-brand">Category Pulse</span>'
+               f'<span class="cp-datalabel">{esc(label)}</span>')
     with st.container(horizontal=True, gap="small", vertical_alignment="center", width="content"):
         if store is not None and len(store.measures) > 1 and st.session_state.get("tour_step") is None:
             st.segmented_control(
