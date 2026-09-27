@@ -18,7 +18,7 @@
 | **Plan** | Tomorrow's plan for the morning huddle: what tomorrow needs to sell, the categories to focus on and what to do, stock to request, busy hours and floor split, ready to share on WhatsApp |
 | **Categories** | All 29 categories as cards, a table or a chart, with filters. Tap any one for its detail |
 | **Stock** | Stockouts, broken size runs, what to request per size (downloadable), today's last-piece alerts, and sizes likely to run out before the next delivery |
-| **Floor and staff** | Visitors and buyers per floor zone, and tomorrow's peak hours and floor split |
+| **Floor and staff** | In plain words: visitors today compared with a usual day, whether they're buying ("12 in every 100 visitors bought, down from 21") and what to check, tomorrow's busy times ("5-8 pm"), and how many people to put on each floor for however many you'll have |
 | **Sell** | Cross-sell scripts for the till, and what each loyalty tier responds to |
 | **Summary** | The evening report as a short WhatsApp message (copy or share), the full end-of-day summary, and the month's contribution report |
 | **Your data** | Upload your sales as your till system exports them (plus stock, targets or visitor counts if you have them), check how each column was read, then see what it switches on before every page shows your numbers |

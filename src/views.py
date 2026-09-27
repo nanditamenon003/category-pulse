@@ -25,6 +25,8 @@ import upload
 import usage
 from config import QUESTIONS_PER_DAY
 from forecast import CHANCE_PHRASE, GOAL_PHRASE, chance_words
+from staffing import clock as staffing_clock
+from staffing import friendly_window, people_per_floor
 from store import WEEKDAY_NAMES, StoreDataError
 from ui import (
     ACCENT,
@@ -559,17 +561,14 @@ def _shoppers_tab(detail):
     recent, baseline = c["recent_last_3_days_and_today"], c["baseline_earlier_this_month"]
     change = c["visitors_change_vs_typical_pct"]
     html_block('<div class="cp-kpis">'
-               + kpi_card(f"Visitors to {c['zone']}", f"{recent['zone_visitors']}",
-                          f"last 3 days + today, typical {c['typical_visitors_for_recent_days']}"
-                          f" ({change:+.0f}%)" if change is not None else "")
-               + kpi_card("Share who bought here", f"{recent['conversion_rate_pct']}%",
-                          f"was {baseline['conversion_rate_pct']}% earlier this month")
-               + kpi_card("Units per sale", f"{recent['units_per_transaction'] or 0}",
-                          f"was {baseline['units_per_transaction'] or 0}")
+               + kpi_card(f"Visitors to {c['zone']}", f"{recent['zone_visitors']:,}",
+                          f"last 3 days and today: {_versus_usual(change) or 'nothing to compare yet'}")
+               + kpi_card("Bought from this category", _per_visitors(recent["conversion_rate_pct"]),
+                          f"of the floor's visitors (earlier: {_per_visitors(baseline['conversion_rate_pct'])})")
+               + kpi_card("Pieces per bill", f"{recent['units_per_transaction'] or 0}",
+                          f"earlier this month: {baseline['units_per_transaction'] or 0}")
                + "</div>")
-    html_block(f'<div class="cp-do"><b>Reading:</b> {esc(c["explanation"])}</div>')
-    html_block('<div class="cp-small" style="margin-top:8px">Visitors are counted per floor zone, so '
-               'this compares the category with everyone who visited its floor.</div>')
+    html_block(_reading_row(c["subject"], c, numbers=False))
 
 
 def _sell_tab(category, detail, hour):
@@ -914,14 +913,44 @@ def stock_page():
 
 # --- Floor and staff page ---------------------------------------------------------------------
 
-READING_LABEL = {
-    "normal": "normal",
-    "possible_dip": "possible dip, not proven",
-    "conversion_problem": "fewer are buying",
-    "traffic_problem": "fewer visitors",
-    "traffic_and_conversion_down": "fewer visitors and fewer buying",
-    "too_few_sales_to_judge": "too few sales to judge",
+# Visitors vs buyers, as it would be said on the floor: a short label (with its
+# colour), what's happening, and what to check.
+READING = {
+    "normal": ("Normal", "green", "People are coming in and buying as usual.", None),
+    "possible_dip": ("Watch", "amber", "A little lower than usual, but it could still be normal ups "
+                     "and downs.", "Keep an eye on it; nothing to change yet."),
+    "conversion_problem": ("Fewer buying", "red", "People are coming in as usual, but fewer of them "
+                           "are buying.",
+                           "Check the shelves: are the popular sizes out? Is someone free to help "
+                           "and at the fitting room? Are prices and offers clear?"),
+    "traffic_problem": ("Fewer visitors", "red", "Fewer people than usual are coming to this floor, "
+                        "but those who come still buy as usual.",
+                        "Make the entrance and displays more inviting, and tell the manager: it "
+                        "may need marketing or a window change."),
+    "traffic_and_conversion_down": ("Fewer of both", "red", "Fewer people are coming in, and fewer "
+                                    "of those are buying.",
+                                    "Check the shelves and sizes first, then the entrance and "
+                                    "displays."),
+    "too_few_sales_to_judge": ("Too early", "neutral", "Too few sales lately to tell.", None),
 }
+
+
+def _per_visitors(pct):
+    """A share of visitors as people say it: '11 in every 100' (or 'in every 1,000' when small)."""
+    if pct is None:
+        return "none"
+    if pct >= 5:
+        return f"{pct:.0f} in every 100"
+    return f"{pct * 10:.0f} in every 1,000"
+
+
+def _versus_usual(pct):
+    """'+18' -> '18% busier than usual'; small changes are 'about usual'."""
+    if pct is None:
+        return None
+    if abs(pct) < 8:
+        return "about usual"
+    return f"{abs(pct):.0f}% {'busier' if pct > 0 else 'quieter'} than usual"
 
 
 def _hour_chart(pattern):
@@ -930,17 +959,17 @@ def _hour_chart(pattern):
         start, end = (int(t.split(":")[0]) for t in window.split("-"))
         peaks.update(range(start, end))
     df = pd.DataFrame([
-        {"Hour": f"{h}:00", "Visitors": v, "Peak": "Peak" if h in peaks else "Other"}
+        {"Hour": f"{h % 12 or 12}{'a' if h < 12 else 'p'}", "Time": staffing_clock(h), "Visitors": v,
+         "Peak": "Busy" if h in peaks else "Other"}
         for h, v in pattern["avg_visitors_by_hour"].items()
     ])
-    return alt.Chart(df).mark_bar(size=14).encode(
-        x=alt.X("Hour:N", sort=None, title=None,
-                axis=alt.Axis(labelAngle=0, labelExpr="split(datum.label, ':')[0]")),
+    return alt.Chart(df).mark_bar(size=14, cornerRadiusTopLeft=3, cornerRadiusTopRight=3).encode(
+        x=alt.X("Hour:N", sort=None, title=None, axis=alt.Axis(labelAngle=0)),
         y=alt.Y("Visitors:Q", title=None, axis=alt.Axis(grid=False, labels=False, ticks=False,
                                                         domain=False)),
         color=alt.Color("Peak:N", legend=None,
-                        scale=alt.Scale(domain=["Peak", "Other"], range=[TEXT, "#C9C9C4"])),
-        tooltip=["Hour", alt.Tooltip("Visitors:Q", format=".1f", title="Average visitors")],
+                        scale=alt.Scale(domain=["Busy", "Other"], range=[ACCENT, "#D5D4CF"])),
+        tooltip=["Time", alt.Tooltip("Visitors:Q", format=".0f", title="Usual visitors")],
     ).properties(height=120).configure_view(stroke=None).configure_axis(
         labelFont="Inter", labelFontSize=10, labelColor=MUTED, domainColor=BORDER, tickColor=BORDER,
     ).configure(background="#FFFFFF")
@@ -952,24 +981,26 @@ def floor_page():
                 "tomorrow. Include visitor counts when you upload."):
         return
     hour = current_hour()
-    page_title("Floor and staff", "Who's coming in, how many are buying, and where to put the team "
+    page_title("Floor and staff", "Who's coming in, whether they're buying, and where to put the team "
                                   "tomorrow.")
     s = current_store()
     if not s.has_footfall:
         _not_in_data("visitor counts", "upload visitor counts per floor, by day or hour")
         return
     zones = zones_at(hour)
+    kind = "a weekend or sale day" if s.is_busy(s.today_day) else "a normal weekday"
+    moment = f"by {staffing_clock(hour + 1)}" if s.hourly and hour < s.hours[-1] else "today"
 
-    def typical(f):
+    def usual(f):
         if f["typical_visitors_by_this_hour"] is None:
-            return "no earlier days of this kind yet"
-        change = f" ({f['pct_vs_typical']:+.0f}%)" if f["pct_vs_typical"] is not None else ""
-        return f"typical {f['typical_visitors_by_this_hour']:.0f}{change}"
+            return "no earlier days like today to compare with yet"
+        verdict = _versus_usual(f["pct_vs_typical"])
+        return f"{verdict} (usually about {f['typical_visitors_by_this_hour']:.0f} {moment})"
 
-    html_block(heading("Visitors today", f"by {time_label(hour)}, vs a typical day of the same kind")
+    html_block(heading("Visitors today", f"{moment}, compared with {kind} earlier this month")
                + '<div class="cp-kpis">'
-               + "".join(kpi_card(z["footfall"]["zone"], f"{z['footfall']['visitors_today_so_far']}",
-                                  typical(z["footfall"]))
+               + "".join(kpi_card(z["footfall"]["zone"], f"{z['footfall']['visitors_today_so_far']:,}",
+                                  usual(z["footfall"]))
                          for z in zones)
                + "</div>")
 
@@ -988,44 +1019,54 @@ def floor_page():
     _tomorrow(s)
 
 
+def _reading_row(zone_or_name, c, numbers=True):
+    """One floor's (or category's) visitors-vs-buyers reading, in plain words."""
+    label, tone, what, check = READING[c["reading"]]
+    recent, before = c["recent_last_3_days_and_today"], c["baseline_earlier_this_month"]
+    numbers = (f"{_per_visitors(recent['conversion_rate_pct'])} visitors bought "
+               f"(earlier this month: {_per_visitors(before['conversion_rate_pct'])})." if numbers else "")
+    do = f'<div class="cp-row-text"><b>What to do:</b> {esc(check)}</div>' if check else ""
+    return (f'<div class="cp-row {tone}" style="margin-bottom:8px"><div style="flex:1;min-width:0">'
+            f'<span class="cp-pill {tone}">{esc(label)}</span>'
+            f'<div class="cp-row-name">{esc(zone_or_name)}</div>'
+            f'<div class="cp-row-text">{esc(what)} {esc(numbers)}</div>{do}</div></div>')
+
+
 def _visitors_vs_buyers(zones):
-    html_block(heading("Visitors vs buyers", "last 3 days + today, vs the first half of the month")
-               + '<div class="cp-kpis">'
-               + "".join(
-                   kpi_card(f"{z['conversion']['zone']}: share who bought",
-                            f"{z['conversion']['recent_last_3_days_and_today']['conversion_rate_pct']}%",
-                            f"was {z['conversion']['baseline_earlier_this_month']['conversion_rate_pct']}%"
-                            f" · {READING_LABEL[z['conversion']['reading']]}")
-                   for z in zones)
-               + "</div>")
+    html_block(heading("Are they buying?", "the last 3 days and today, compared with earlier this month")
+               + "".join(_reading_row(z["conversion"]["zone"], z["conversion"]) for z in zones))
 
 
 def _tomorrow(s):
     rec, patterns = staffing_for(s.today_day + 1)
-    html_block(heading(f"Tomorrow: {rec['weekday']}",
-                       f"from the last {len(rec['based_on_days'])} {rec['day_type']}s"))
+    busy = "a weekend or sale day" if rec["day_type"] != "weekday" else "a weekday"
+    html_block(heading(f"Tomorrow, {rec['weekday']}: when it gets busy",
+                       f"from the last {len(rec['based_on_days'])} days like it ({busy})"))
     for note in rec["notes"]:
         html_block(f'<div class="cp-do">{esc(note)}</div>')
 
     columns = st.columns(len(patterns))
     for column, (zone, pattern) in zip(columns, patterns.items()):
         with column:
-            # e.g. "rough guide (low traffic)" -> " (rough guide: low traffic)"
-            note = pattern["reliability"].replace(" (", ": ").rstrip(")")
-            reliability = "" if pattern["reliability"] == "good" else f" ({note})"
+            windows = ", ".join(friendly_window(w) for w in pattern["peak_windows"]) or "no clear busy time"
+            rough = "" if pattern["reliability"] == "good" else " (few visitors, so a rough guide)"
             html_block(f'<div class="cp-row-name">{esc(zone)}</div>'
-                       f'<div class="cp-small">Peaks {esc(", ".join(pattern["peak_windows"]))}'
-                       f'{esc(reliability)}</div>')
+                       f'<div class="cp-small">Busiest {esc(windows)}{esc(rough)}</div>')
             st.altair_chart(_hour_chart(pattern), width="stretch", theme=None)
 
+    busiest = staffing_clock(rec["store_busiest_hour"])
+    html_block(heading(f"Where to put people at {busiest}", "the busiest hour of the day"))
+    people = st.number_input("How many people will be on the floor then?", min_value=1, max_value=60,
+                             value=st.session_state.get("floor_people", 6), step=1, key="floor_people")
     split = rec["suggested_floor_split_at_busiest_hour_pct"]
+    counts = people_per_floor(split, int(people))
     bars = "".join(
-        f'<div class="cp-row-text" style="margin-top:6px">{esc(zone)} · {pct}%</div>'
+        f'<div class="cp-row-text" style="margin-top:8px"><b>{esc(zone)}: {counts[zone]} '
+        f'{"person" if counts[zone] == 1 else "people"}</b> '
+        f'<span class="cp-small">({pct}% of shoppers are here)</span></div>'
         f'<div class="cp-track"><div class="cp-fill" style="width:{pct}%"></div></div>'
         for zone, pct in split.items())
-    html_block(heading(f"Floor team at {rec['store_busiest_hour']}:00, the busiest hour",
-                       "split in proportion to where shoppers are")
-               + f'<div class="cp-panel">{bars}</div>')
+    html_block(f'<div class="cp-panel">{bars}</div>')
     with st.expander("Which past days is this based on?"):
         st.write(", ".join(rec["based_on_days"]))
 
@@ -1161,10 +1202,11 @@ def plan_page():
     else:
         split = ", ".join(f"{zone} {pct}%" for zone, pct in people["suggested_floor_split_at_busiest_hour_pct"].items())
         html_block('<div class="cp-panel">'
-                   + "".join(f'<p><b>{esc(z["zone"])}:</b> busiest {esc(", ".join(z["peak_windows"]) or "no clear peak")}'
+                   + "".join(f'<p><b>{esc(z["zone"])}:</b> busiest '
+                             f'{esc(", ".join(friendly_window(w) for w in z["peak_windows"]) or "no clear peak")}'
                              f'{" · " + esc(z["reliability"]) if z["reliability"] != "good" else ""}</p>'
                              for z in people["zones"])
-                   + f'<p>At {people["store_busiest_hour"]}:00, the store\'s busiest hour, split the team: '
+                   + f'<p>At {staffing_clock(people["store_busiest_hour"])}, the store\'s busiest hour, split the team: '
                      f'{esc(split)}.</p>'
                    + "".join(f'<p class="cp-small">{esc(n)}</p>' for n in people["notes"])
                    + "</div>")

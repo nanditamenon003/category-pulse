@@ -32,6 +32,38 @@ def _hour_windows(hours):
     return [f"{s}:00-{e + 1}:00" for s, e in windows]
 
 
+def clock(hour):
+    """14 -> '2 pm', 12 -> '12 pm', 9 -> '9 am': how people on the floor say times."""
+    return f"{hour % 12 or 12} {'am' if hour % 24 < 12 else 'pm'}"
+
+
+def friendly_window(window):
+    """'17:00-20:00' -> '5-8 pm'; '11:00-12:00' -> '11 am-12 pm'."""
+    start, end = (int(t.split(":")[0]) for t in window.split("-"))
+    if (start < 12) == (end % 24 < 12):
+        return f"{start % 12 or 12}-{clock(end)}"
+    return f"{clock(start)}-{clock(end)}"
+
+
+def people_per_floor(split_pct, people):
+    """
+    A floor split in percent -> whole people, adding up to `people`. Every
+    floor with shoppers gets at least one person when there are enough to go
+    round; the rest follow the split (largest remainders first).
+    """
+    zones = [z for z, pct in split_pct.items() if pct > 0]
+    if people <= 0 or not zones:
+        return {z: 0 for z in split_pct}
+    base = {z: 1 for z in zones} if people >= len(zones) else {z: 0 for z in zones}
+    left = people - sum(base.values())
+    total = sum(split_pct[z] for z in zones)
+    shares = {z: left * split_pct[z] / total for z in zones}
+    counts = {z: base[z] + int(shares[z]) for z in zones}
+    for z in sorted(zones, key=lambda z: -(shares[z] - int(shares[z])))[:people - sum(counts.values())]:
+        counts[z] += 1
+    return {z: counts.get(z, 0) for z in split_pct}
+
+
 def get_peak_hours(zone, busy_day, before_day=None, store=None):
     """
     Average visitors per hour for a zone on past days of one kind (busy days

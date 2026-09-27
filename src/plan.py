@@ -161,11 +161,12 @@ def plan_message(plan, store):
             lines.append(f"- {c['category']}: {c['text']}")
     people = plan["people"]
     if people:
-        peaks = "; ".join(f"{z['zone']} {', '.join(z['peak_windows'])}" for z in people["zones"] if z["peak_windows"])
+        peaks = "; ".join(f"{z['zone']} {', '.join(staffing.friendly_window(w) for w in z['peak_windows'])}"
+                          for z in people["zones"] if z["peak_windows"])
         split = ", ".join(f"{zone} {pct}%" for zone, pct in people["suggested_floor_split_at_busiest_hour_pct"].items())
         lines.append("")
         lines.append(f"*Busiest:* {peaks}.")
-        lines.append(f"At {people['store_busiest_hour']}:00 put the team: {split}.")
+        lines.append(f"At {staffing.clock(people['store_busiest_hour'])} put the team: {split}.")
     if plan["going_well"]:
         lines.append("")
         lines.append(f"*Going well, keep it stocked:* {', '.join(plan['going_well'])}.")
