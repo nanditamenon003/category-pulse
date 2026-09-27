@@ -1277,20 +1277,16 @@ def plan_page():
 
 def summary_page():
     if _no_data("Summary", "Your end-of-day summary will show here",
-                "A short plain-English summary of the day, and the month's contribution report, "
-                "both downloadable."):
+                "A short summary of the day, and the month's contribution report, both downloadable."):
         return
     hour = current_hour()
     s = current_store()
     is_close = hour == s.hours[-1]
     moment = "close" if is_close else time_label(hour).replace(":", "")
     page_title("End-of-day summary" if is_close else "Summary so far today",
-               "The plain-English summary that replaces the evening spreadsheet, and the month's "
-               "contribution report.")
+               "The summary that replaces the evening spreadsheet, and the month's contribution report.")
 
-    html_block(heading("Evening report for WhatsApp", f"at the close of day {s.today_day}")
-               + '<div class="cp-small" style="margin:0 0 6px">Short enough to read on a phone. Copy it '
-                 '(top right of the box) or share it straight to your area manager or the team.</div>')
+    html_block(heading("Evening report for WhatsApp", f"at the close of day {s.today_day}"))
     _share_block(whatsapp_report_text(), "evening")
 
     html_block(heading("The full summary"))
@@ -1778,7 +1774,7 @@ GUIDE_TERMS = [
 
 
 def guide_page():
-    page_title("Guide", "How to read Category Pulse, in plain English.")
+    page_title("Guide", "How to read Category Pulse.")
     if st.button("Start the guided tour", key="guide_tour", icon=":material/tour:"):
         tour.start()
 

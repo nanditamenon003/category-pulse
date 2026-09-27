@@ -143,7 +143,6 @@ def welcome_page():
     with left:
         html_block(f'<div class="cp-w-brand"><img src="{logo_uri("logo-mark-120.png")}" alt="">'
                    f'<span>Category Pulse</span></div>'
-                   '<div class="cp-w-kicker">For clothing store teams</div>'
                    '<div class="cp-w-hero">Catch the categories falling behind, '
                    '<span class="cp-grad">while there\'s still time to act.</span></div>'
                    '<div class="cp-w-sub">Upload your sales export. Category Pulse shows what\'s behind, '
