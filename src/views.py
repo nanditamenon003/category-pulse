@@ -70,6 +70,7 @@ from ui import (
     range_bar,
     request_forget,
     risky_sizes_at,
+    slow_stock_at,
     slug,
     staffing_for,
     stock_health_at,
@@ -825,7 +826,8 @@ def _stock_problem_text(r):
 
 def stock_page():
     if _no_data("Stock", "Stock problems will show here",
-                "Sold-out sizes, broken size runs, last pieces and sizes likely to run out. Include "
+                "Sold-out sizes, broken size runs, last pieces, sizes at risk of running out, and "
+                "slow stock. Include "
                 "stock counts when you upload your sales."):
         return
     hour = current_hour()
@@ -846,7 +848,8 @@ def stock_page():
                           tone="red" if problems else "")
                + kpi_card("Last pieces today", f"{len(pieces)}",
                           f"{sum(a['is_core_size'] for a in pieces)} in core sizes")
-               + kpi_card("Likely to run out", f"{len(risky)}", "sizes, before the next delivery")
+               + kpi_card("At risk of running out", f"{len(risky)}",
+                          f"{'size' if len(risky) == 1 else 'sizes'}, before the next delivery")
                + kpi_card("Next delivery", "Not set" if no_schedule else
                           (f"Day {next_delivery}" if next_delivery else "None this month"),
                           "choose one on Your data" if no_schedule else delivery_weekday)
@@ -891,14 +894,19 @@ def stock_page():
                      f"Open {a['category']}"):
             category_dialog(a["category"])
 
-    html_block(heading("Likely to run out before the next delivery",
-                       "a projection from each size's selling rate over the last 7 days"))
+    _slow_stock_section(s, hour)
+
+    html_block(heading("At risk of running out before the next delivery",
+                       "a watch list, from each size's selling rate over the last 7 days"))
     if no_schedule:
         _not_in_data("the weekday deliveries arrive", "choose a delivery day")
     elif not risky:
-        html_block('<div class="cp-panel"><p>No size looks likely to run out before the next '
+        html_block('<div class="cp-panel"><p>No size looks at risk of running out before the next '
                    'delivery.</p></div>')
     else:
+        html_block('<div class="cp-small" style="margin-bottom:6px">Not a certainty: a size sells a few '
+                   'pieces a week, so most of these will last. But they\'re far likelier to sell out than '
+                   'other sizes, so keep them out on the floor and on the request.</div>')
         st.dataframe(pd.DataFrame([
             {
                 "Category": r["category"],
@@ -909,6 +917,39 @@ def stock_page():
             }
             for r in risky
         ]), hide_index=True, width="stretch")
+
+
+def _slow_stock_row(item, s):
+    """One slow-stock item: what's not selling, the money in it, and what to do."""
+    value = f" · {inr(item['value_tied_up'])} tied up" if item["value_tied_up"] else ""
+    what = ("the whole category" if item["whole_category"]
+            else f"size{'s' if len(item['sizes_not_selling']) > 1 else ''} {', '.join(item['sizes_not_selling'])}")
+    return (f'<div class="cp-row" style="margin-bottom:8px"><div style="flex:1;min-width:0">'
+            f'<span class="cp-chip" style="margin-left:0">Slow</span>'
+            f'<div class="cp-row-name">{esc(item["category"])} '
+            f'<span class="cp-small">{esc(what)}, {item["units"]} pieces{esc(value)}</span></div>'
+            f'<div class="cp-row-text">{esc(item["suggestion"])}</div></div>'
+            f'<div class="cp-chev">&rsaquo;</div></div>')
+
+
+def _slow_stock_section(s, hour):
+    report = slow_stock_at(hour)
+    html_block(heading("Slow stock", "not selling: money tied up, most first"))
+    if not report["enough_history"]:
+        html_block('<div class="cp-panel"><p>Slow stock shows once there are two weeks of sales to '
+                   'judge by.</p></div>')
+        return
+    if not report["slow"]:
+        html_block('<div class="cp-panel"><p>Nothing is sitting unsold: every category is selling '
+                   'through at a normal rate.</p></div>')
+        return
+    total = sum(i["value_tied_up"] or 0 for i in report["slow"])
+    if total:
+        html_block(f'<div class="cp-small" style="margin-bottom:6px">{inr(total)} of stock isn\'t '
+                   f'selling. {esc(report["note"])}</div>')
+    for item in report["slow"]:
+        if clickable(f"slow_{slug(item['category'])}", _slow_stock_row(item, s), f"Open {item['category']}"):
+            category_dialog(item["category"])
 
 
 # --- Floor and staff page ---------------------------------------------------------------------
@@ -1214,6 +1255,13 @@ def plan_page():
     if p["going_well"]:
         html_block(heading("Going well") + f'<div class="cp-panel"><p>{esc(", ".join(p["going_well"]))}: '
                    f'keep them stocked and on display.</p></div>')
+
+    if p.get("slow"):
+        html_block(heading("Worth a look: slow stock", "not selling, most money first; more on the Stock page"))
+        for item in p["slow"]:
+            if clickable(f"planslow_{slug(item['category'])}", _slow_stock_row(item, s),
+                         f"Open {item['category']}"):
+                category_dialog(item["category"])
 
     html_block(heading("Share with the team", "for the huddle or the team's WhatsApp group"))
     _share_block(plan_message_text(), "plan")

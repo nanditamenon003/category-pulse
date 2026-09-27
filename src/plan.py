@@ -9,7 +9,7 @@ jobs. This puts them on one screen, and in a message ready to share:
     each, and what to say at the till
   - stock: sizes to request, most urgent first
   - people: tomorrow's busy hours and where to put the team (with visitor counts)
-  - what's going well, to keep stocked
+  - what's going well, to keep stocked, and the slow stock worth a look
 Every figure comes from the same functions as the rest of the app.
 """
 
@@ -113,6 +113,9 @@ def get_plan(day=None, store=None):
     plan["people"] = staffing.get_staffing_recommendation(tomorrow, store=store) \
         if store.has_visitor_hours else None
 
+    # Slow stock: the two with the most money tied up.
+    plan["slow"] = stock.get_slow_stock(day, close, store=store)["slow"][:2] if store.has_stock else []
+
     # Going well: keep them stocked.
     plan["going_well"] = [p["category"] for p in sorted(
         (p for p in pace if p["status"] == "ahead"), key=lambda p: -p["pct_vs_pace"])][:3]
@@ -170,6 +173,15 @@ def plan_message(plan, store):
     if plan["going_well"]:
         lines.append("")
         lines.append(f"*Going well, keep it stocked:* {', '.join(plan['going_well'])}.")
+    if plan.get("slow"):
+        lines.append("")
+        lines.append("*Slow stock:* " + "; ".join(
+            (f"{s['category']} ({s['units']} pieces" + (f", {s['weeks_of_stock']:.0f} weeks' worth"
+                                                       if s["weeks_of_stock"] else "") + ")")
+            if s["whole_category"] else
+            f"{s['category']} size{'s' if len(s['sizes_not_selling']) > 1 else ''} "
+            f"{', '.join(s['sizes_not_selling'])} ({s['units']} pieces, no sale in two weeks)"
+            for s in plan["slow"]) + ". See the Stock page.")
     return "\n".join(lines)
 
 

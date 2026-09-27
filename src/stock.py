@@ -380,7 +380,17 @@ def _in_stock_rate(store, category, size, through, sold):
     `sold` is {day: units} for this size. Returns None if it was on the shelf
     on fewer than 3 days.
     """
-    for first in (max(1, through - 13), 1):
+    days = _in_stock_days(store, category, size, through, sold)
+    return float(sum(sold.get(d, 0) for d in days)) / len(days) if days else None
+
+
+def _in_stock_days(store, category, size, through, sold, first_choice=14):
+    """
+    The days a size was on the shelf (stock at the previous count, or sold that
+    day), from the last `first_choice` days, or the whole month if that gives
+    fewer than 3. [] if still fewer than 3.
+    """
+    for first in (max(1, through - first_choice + 1), 1):
         days = []
         for d in range(first, through + 1):
             prev = _closing_hour(store, d - 1)
@@ -388,8 +398,8 @@ def _in_stock_rate(store, category, size, through, sold):
             if had_stock or sold.get(d, 0) > 0:
                 days.append(d)
         if len(days) >= 3:
-            return float(sum(sold.get(d, 0) for d in days)) / len(days)
-    return None
+            return days
+    return []
 
 
 def get_request_quantities(day=None, hour=None, store=None):
@@ -460,6 +470,115 @@ def get_request_quantities(day=None, hour=None, store=None):
         "note": "A projection: assumes each size keeps selling as it has on days it was in stock.",
         "categories": categories,
     }
+
+
+# --- Slow stock: stock that isn't selling -------------------------------------------------------
+#
+# The other side of running out. Why not also predict the day each size sells
+# out? It was built and back-tested on the Sample Store: a size sells a few
+# pieces a week, so which day its last piece goes is mostly chance, and the
+# predictions did no better than guessing the average. The flag in
+# get_days_of_cover (a watch list, about 9 times likelier to sell out than an
+# unflagged size) and the request quantities (which cover that uncertainty with
+# a margin rather than trying to time it) serve that need better. Slow stock is
+# different: it's read from what has already happened, so it's solid.
+
+def get_slow_stock(day=None, hour=None, store=None):
+    """
+    Stock that isn't selling, most money tied up first:
+      - whole categories with more than SLOW_COVER_WEEKS weeks of stock at their
+        recent selling rate (and at least SLOW_MIN_CATEGORY_UNITS pieces)
+      - sizes with at least SLOW_MIN_UNITS pieces that were on the shelf but
+        haven't sold in SLOW_WINDOW_DAYS days
+    each with one modest suggestion (things a store team can do or ask for),
+    and a fast-selling category on the same floor that could use the space.
+    Needs SLOW_WINDOW_DAYS days of sales; before that the list is empty.
+    """
+    import kpi
+    from config import SLOW_COVER_WEEKS, SLOW_MIN_CATEGORY_UNITS, SLOW_MIN_UNITS, SLOW_WINDOW_DAYS
+
+    store, day, hour = resolve(store, day, hour)
+    store.require("stock")
+    through = day if hour >= store.hours[-1] else day - 1
+    enough_history = through >= SLOW_WINDOW_DAYS
+
+    sold_by = {}  # category -> size -> {day: units}
+    for (category, size, d), units in (store.sales[store.sales["day"] <= through]
+                                       .groupby(["category", "size", "day"])["units_sold"].sum().items()):
+        sold_by.setdefault(category, {}).setdefault(size, {})[d] = units
+
+    slow, cover_by_category = [], {}
+    for category in store.categories:
+        on_hand = get_stock_status(category, day, hour, store=store)["remaining_by_size"]
+        rate, not_selling = 0.0, []
+        for size, units in on_hand.items():
+            sold = sold_by.get(category, {}).get(size, {})
+            days = _in_stock_days(store, category, size, through, sold)
+            if not days:
+                continue
+            rate += sum(sold.get(d, 0) for d in days) / len(days)
+            recent = [d for d in days if d > through - SLOW_WINDOW_DAYS]
+            if (enough_history and units >= SLOW_MIN_UNITS and len(recent) >= SLOW_WINDOW_DAYS - 4
+                    and not any(sold.get(d, 0) for d in recent)):
+                not_selling.append((size, int(units)))
+        total = int(sum(on_hand.values()))
+        weeks = total / rate / 7 if rate > 0 else None
+        cover_by_category[category] = weeks
+        # Every size with stock has stopped selling: that's the whole category.
+        all_stopped = bool(not_selling) and len(not_selling) == sum(1 for u in on_hand.values() if u > 0)
+        overstocked = enough_history and total >= SLOW_MIN_CATEGORY_UNITS and (
+            all_stopped or (weeks is not None and weeks > SLOW_COVER_WEEKS))
+        if not (overstocked or not_selling):
+            continue
+        units = total if overstocked else sum(u for _, u in not_selling)
+        price = store.avg_price.get(category, store.avg_price["_overall"]) if store.has_value else None
+        slow.append({
+            "category": category,
+            "department": store.category_department[category],
+            "whole_category": overstocked,
+            "units": units,
+            "weeks_of_stock": round(weeks, 1) if weeks is not None else None,
+            "value_tied_up": round(units * price) if price else None,
+            "sizes_not_selling": [s for s, _ in not_selling],
+        })
+
+    # A fast seller on the same floor that could use the space: least stock cover, not behind.
+    pace = {p["category"]: p for p in kpi.get_category_pace(day, hour, store=store)}
+    for s in slow:
+        fast = sorted((c for c, w in cover_by_category.items()
+                       if w is not None and w < 2 and c != s["category"]
+                       and store.category_department[c] == s["department"]
+                       and pace[c]["status"] in ("on_pace", "ahead")),
+                      key=lambda c: cover_by_category[c])
+        s["replace_with"] = fast[0] if fast else None
+        s["suggestion"] = _slow_suggestion(s)
+    slow.sort(key=lambda s: -(s["value_tied_up"] or s["units"]))
+    return {
+        "as_of": {"day": day, "hour": hour},
+        "enough_history": enough_history,
+        "slow": slow,
+        "note": (f"From what has already sold: whole categories with more than {SLOW_COVER_WEEKS} "
+                 f"weeks of stock at their recent rate, and sizes that were on the shelf but haven't "
+                 f"sold in {SLOW_WINDOW_DAYS} days."),
+    }
+
+
+def _slow_suggestion(s):
+    """One modest suggestion for slow stock: things a store team can actually do or ask for."""
+    if s["whole_category"]:
+        how_long = (f"Enough for about {s['weeks_of_stock']:.0f} weeks at the current rate. "
+                    if s["weeks_of_stock"] else "It has hardly sold in two weeks. ")
+        text = (how_long + "Hold further orders, give it a better spot on the floor, and ask your area "
+                "manager about moving some to a store where it sells better.")
+        if s["replace_with"]:
+            text += f" Some of its display space could go to {s['replace_with']}, which is selling fast."
+        return text
+    sizes = " and ".join(s["sizes_not_selling"])
+    if len(s["sizes_not_selling"]) > 1:
+        return (f"Sizes {sizes} haven't sold in two weeks. Check they're out on the floor; if they "
+                f"still don't move, don't reorder them, and ask about a transfer or markdown.")
+    return (f"Size {sizes} hasn't sold in two weeks. Check it's out on the floor; if it still "
+            f"doesn't move, don't reorder it, and ask about a transfer or markdown.")
 
 
 # --- Verification output -------------------------------------------------------

@@ -354,6 +354,18 @@ DELIVERY_CYCLE_DAYS = 7
 REQUEST_DAYS_WITHOUT_SCHEDULE = 10
 REQUEST_SAFETY_Z = 1.28
 
+# Slow stock (stock.get_slow_stock).
+#   - a slow size: at least SLOW_MIN_UNITS pieces, on the shelf for most of the last
+#     SLOW_WINDOW_DAYS, and no sale in that time
+#   - an overstocked category: at least SLOW_MIN_CATEGORY_UNITS pieces, and more than
+#     SLOW_COVER_WEEKS weeks of stock at its recent selling rate (or no size selling)
+#     Six weeks is a common retail line: past it, stock is unlikely to sell through
+#     before the season changes.
+SLOW_WINDOW_DAYS = 14
+SLOW_COVER_WEEKS = 6
+SLOW_MIN_UNITS = 3
+SLOW_MIN_CATEGORY_UNITS = 10
+
 # --- AI agent (Phase 4) -----------------------------------------------------------------
 # Which AI provider the chat uses: change this one line to switch. The agent
 # is written against Anthropic's Messages API; DeepSeek offers an

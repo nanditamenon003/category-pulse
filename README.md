@@ -17,7 +17,7 @@
 | **Today** | The home screen: four headline numbers (with the likely month-end range as a bar), a link to tomorrow's plan, a "Month so far" chart (sales so far against the path to target, and where the month is likely to land), what needs action now and why, and a "Start here" guide for first-time visitors |
 | **Plan** | Tomorrow's plan for the morning huddle: what tomorrow needs to sell, the categories to focus on and what to do, stock to request, busy hours and floor split, ready to share on WhatsApp |
 | **Categories** | All 29 categories as cards, a table or a chart, with filters. Tap any one for its detail |
-| **Stock** | Stockouts, broken size runs, what to request per size (downloadable), today's last-piece alerts, and sizes likely to run out before the next delivery |
+| **Stock** | Stockouts, broken size runs, what to request per size (downloadable), today's last-piece alerts, slow stock (what isn't selling and the money tied up in it), and sizes at risk of running out before the next delivery |
 | **Floor and staff** | In plain words: visitors today compared with a usual day, whether they're buying ("12 in every 100 visitors bought, down from 21") and what to check, tomorrow's busy times ("5-8 pm"), and how many people to put on each floor for however many you'll have |
 | **Sell** | Cross-sell scripts for the till, and what each loyalty tier responds to |
 | **Summary** | The evening report as a short WhatsApp message (copy or share), the full end-of-day summary, and the month's contribution report |
@@ -58,6 +58,7 @@ Category Pulse is a layer on top of the store's existing system, not a replaceme
 | **Staffing** | Tomorrow's peak hours per floor zone, learned from past days of the same kind (weekday vs weekend). |
 | **Month-end range** | Instead of one projected number, a range (the middle 80% of outcomes) and the chance of reaching target, from the pace so far and how much the store's daily sales usually vary. Tested on thousands of simulated months: about 8 in 10 finish inside it. |
 | **What to request** | For each size: enough to last until the delivery after next at the rate it sells when it's on the shelf, with a margin on core sizes. Sold-out core sizes and sizes that won't last to the next delivery come first. |
+| **Slow stock** | The other side of running out: whole categories with more than 6 weeks of stock, and sizes that sat on the shelf for two weeks without a sale, most money tied up first, each with a modest suggestion (check it's on the floor, hold orders, ask about a transfer or markdown) and a fast seller on the same floor that could use the space. Back-tested: the week after being flagged, slow stock sold 23% of its pieces against 64% for stock in general. |
 | **Tomorrow's plan** | The morning huddle on one page: tomorrow's goal (and what a usual day like it brings), focus categories with the action and till tip for each, urgent stock requests, busy hours. Ready to share on WhatsApp. |
 | **End-of-day summary** | A short plain-English summary to replace the evening spreadsheet: where the month stands, what's behind and why, what to do tomorrow. Also as a WhatsApp-ready message for the area manager. |
 | **AI chat** | Ask anything ("why is womenswear behind — traffic or conversion?"). The AI answers by calling the same tools, and a **"How I got this"** panel shows every lookup and number it used. |
@@ -183,6 +184,7 @@ category-pulse/
 │   ├── test_upload.py    the upload path: sample round trip, CSV files, refusals
 │   ├── test_smart_import.py  raw till exports, flexible targets, remembered column choices
 │   ├── test_plan.py      the month-end range is honest; requests, tomorrow's plan, WhatsApp report
+│   ├── test_slow_stock.py  slow stock stays slow; the run-out watch list is fair
 │   └── test_storage.py   saving to accounts: scrambled at rest, owner-only, delete
 ├── .streamlit/config.toml  theme (colours, hidden menus)
 ├── data/                   generated data (not stored in git; rebuilt from the seed)
@@ -198,7 +200,7 @@ category-pulse/
 - **Status before numbers.** Green, amber and red are used only for status, always with a word label (so it works for colour-blind users). Buttons and links use one accent colour, the violet from the logo; the logo's full gradient appears only on brand touches (the header line, the welcome page), so it's never mistaken for a status. It's built to be read on a phone.
 - **Privacy by design.** Loyalty targeting works at tier level (Platinum, Gold, Silver, Non-member). No individual customer data exists anywhere in the project. Only the columns in use are kept from an upload, encrypted when saved, and the AI sees a store's figures only after a clear yes.
 - **Honest about gaps.** Every feature says plainly when the data it needs is missing, rather than guessing.
-- **No machine-learning model (yet).** With one simulated store, a trained model would only re-learn the simulator's own rules. Simple, explainable projections are used instead. See the case study.
+- **No machine-learning model (yet), and every prediction is tested.** With one simulated store, a trained model would only re-learn the simulator's own rules. Simple, explainable methods are used, each checked against what happened next: the month-end range (8 in 10 months land inside), slow stock (it keeps selling slowly), the run-out watch list (flagged sizes sell out 13 times as often as others). Predicting the exact day each size sells out was built, tested and dropped: at a few pieces per size per week, it did no better than guessing. See the case study.
 
 ## Limitations
 

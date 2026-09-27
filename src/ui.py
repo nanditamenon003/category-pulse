@@ -445,7 +445,7 @@ def inr(value):
 # store's numbers can never be shown for another.
 
 def _risky_sizes(s, hour):
-    """Sizes likely to run out before the next scheduled delivery (a projection), all categories."""
+    """Sizes at risk of running out before the next scheduled delivery (a watch list), all categories."""
     rows, next_delivery = [], None
     for category in s.categories:
         cover = stock.get_days_of_cover(category, hour=hour, store=s)
@@ -508,6 +508,7 @@ LOOKUPS = {
     "month_end": lambda s, category, hour: forecast.get_month_end_range(category=category, hour=hour, store=s),
     "month_path": lambda s, hour: forecast.get_month_path(hour=hour, store=s),
     "requests": lambda s, hour: stock.get_request_quantities(hour=hour, store=s),
+    "slow_stock": lambda s, hour: stock.get_slow_stock(hour=hour, store=s),
     "plan": lambda s: plan.get_plan(store=s),
     "plan_message": lambda s: plan.plan_message(plan.get_plan(store=s), s),
     "whatsapp": lambda s: digest.whatsapp_report(store=s),
@@ -598,6 +599,10 @@ def month_end_at(hour, category=None):
 def month_path_at(hour):
     """Running sales, the path to target and the likely finish, for the "Month so far" chart."""
     return _get("month_path", hour)
+
+
+def slow_stock_at(hour):
+    return _get("slow_stock", hour, slow=True)
 
 
 def requests_at(hour):

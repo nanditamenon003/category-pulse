@@ -133,7 +133,7 @@ TOOL_NEEDS = {
     "get_stock_health_report": ("stock",), "check_size_runs": ("stock",),
     "get_stock_status": ("stock",), "get_stock_history": ("stock",),
     "get_last_piece_alerts": ("stock",), "get_days_of_cover": ("stock",),
-    "get_request_quantities": ("stock",),
+    "get_request_quantities": ("stock",), "get_slow_stock": ("stock",),
     "get_footfall": ("footfall",), "get_conversion_metrics": ("footfall", "transactions"),
     "get_staffing_recommendation": ("visitor_hours",), "get_tier_playbook": ("loyalty",),
 }
@@ -191,6 +191,12 @@ def build_tools(store):
               "lasts until the delivery after next, most urgent first (core sizes sold out, then sizes "
               "that won't last to the next delivery). A projection from each size's in-stock selling "
               "rate. Use for 'what should I order?' or 'what do we need?'."),
+        _tool("get_slow_stock",
+              "Stock that isn't selling, most money tied up first: whole categories with more than 6 "
+              "weeks of stock at their recent rate, and sizes that were on the shelf but haven't sold "
+              "in two weeks, each with a modest suggestion and a fast seller on the same floor that "
+              "could use the space. Read from what has already sold. Use for 'what's not selling?' "
+              "or 'what should we move or stop ordering?'."),
         _tool("get_month_end_range",
               "Where the month is likely to finish for the whole store (no arguments), a line or a "
               "category: likely, low and high (the middle 80% of outcomes), and the chance of "
@@ -265,6 +271,7 @@ def _build_tool_dispatch(current_hour, store):
         "get_last_piece_alerts": lambda: stock.get_last_piece_alerts(day, now, store=s),
         "get_days_of_cover": lambda category: stock.get_days_of_cover(category, day, now, store=s),
         "get_request_quantities": lambda: _requests_for_agent(stock.get_request_quantities(day, now, store=s)),
+        "get_slow_stock": lambda: stock.get_slow_stock(day, now, store=s),
         "get_month_end_range": lambda category=None, line=None:
             forecast.get_month_end_range(category=category, line=line, day=day, hour=now, store=s),
         "get_tomorrow_plan": lambda: _plan_for_agent(plan.get_plan(store=s)),
