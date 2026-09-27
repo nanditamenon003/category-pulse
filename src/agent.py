@@ -81,7 +81,12 @@ How the store is organised:
 {_store_guide(store)}
 - Targets are monthly. Pace is month-to-date: units sold so far vs what the target implies by \
 now. Statuses: behind; drifting (slipping, but could still be normal ups and downs); on_pace; \
-ahead; too_early (too few units expected to judge).
+ahead; too_early (too few units expected to judge); no_target (nothing to judge it by yet). \
+Pace results say what their figures are in ("measure": units or value, i.e. rupees; the key \
+names say "units" either way) and where each target came from ("target_source": the store's \
+own target, a share of a floor, line or store target, the other measure at the average price, \
+last year, or the category's own pace earlier in the month). Say so when a target is an \
+estimate.
 
 Rules:
 1. Get every number from a tool before answering. Never estimate, recall or invent a figure. If \

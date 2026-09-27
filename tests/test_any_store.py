@@ -210,9 +210,11 @@ def test_bad_tables():
     for m in messages:
         print(f"  - {m}")
 
-    # A category with no target isn't refused: its rows are left out, with a warning.
+    # A category with sales but no target isn't refused: it's kept, with a warning, and
+    # judged by its own earlier pace instead (or not judged, too early in the month).
     kept = build_store(targets, no_target)
-    assert "Mens Socks" not in kept.categories and any("Socks" in w for w in kept.warnings), kept.warnings
+    assert "Mens Socks" in kept.categories and any("Socks" in w for w in kept.warnings), kept.warnings
+    assert kept.target_source["units"]["Mens Socks"] in ("own pace", None)
     print(f"\nAccepted with a warning: {kept.warnings[0]}")
 
 

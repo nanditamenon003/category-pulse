@@ -38,21 +38,32 @@ def _lower_first(text):
 
 
 def _month_paragraph(store, day, hour, pace):
-    sold = sum(p["units_sold_so_far"] for p in pace)
-    expected = sum(p["expected_units_by_now"] for p in pace)
-    target = sum(p["monthly_target"] for p in pace)
-    projected = sum(p["projected_month_end_if_current_rate_continues"] for p in pace)
-    pct = (sold - expected) / expected * 100
-    standing = "right on pace" if abs(pct) < 3 else f"{abs(pct):.0f}% {'ahead' if pct > 0 else 'behind'}"
     weekday = WEEKDAY_NAMES[store.weekday(day)]
     moment = f"Close of day {day}" if hour == store.hours[-1] else f"Day {day} at {hour + 1}:00"
-    if pace and pace[0].get("month_finished"):
+    finished = bool(pace) and pace[0].get("month_finished")
+    when = "the end of the month" if finished else f"{store.days_in_month - day} days left"
+    judged = [p for p in pace if p["monthly_target"]]
+    if not judged:
+        sold = sum(p["units_sold_so_far"] for p in pace)
+        return (f"{moment} ({weekday}), {when}. The store has sold {store.amount_of(sold)} so far. "
+                f"There's no target to judge the month by yet: add targets, or wait until there are "
+                f"12 days of sales to compare with.")
+    sold = sum(p["units_sold_so_far"] for p in judged)
+    expected = sum(p["expected_units_by_now"] for p in judged)
+    target = sum(p["monthly_target"] for p in judged)
+    projected = sum(p["projected_month_end_if_current_rate_continues"] for p in judged)
+    left_out = len(pace) - len(judged)
+    note = (f" ({left_out} {'category' if left_out == 1 else 'categories'} with nothing to judge by "
+            f"{'is' if left_out == 1 else 'are'} left out.)" if left_out else "")
+    if finished:
         result = sold / target * 100 if target else 0
-        return (f"{moment} ({weekday}), the end of the month. The store sold {sold:,} units against "
-                f"its {target:,} target ({result:.0f}%).")
-    return (f"{moment} ({weekday}), {store.days_in_month - day} days left. The store has sold "
-            f"{sold:,} units against about {expected:,.0f} expected, {standing}; at the current rate it "
-            f"would finish near {projected:,} of its {target:,} target.")
+        return (f"{moment} ({weekday}), {when}. The store sold {store.amount_of(sold)} against its "
+                f"{store.amount(target)} target ({result:.0f}%).{note}")
+    pct = (sold - expected) / expected * 100 if expected else 0
+    standing = "right on pace" if abs(pct) < 3 else f"{abs(pct):.0f}% {'ahead' if pct > 0 else 'behind'}"
+    return (f"{moment} ({weekday}), {when}. The store has sold {store.amount_of(sold)} against about "
+            f"{store.amount(expected)} expected, {standing}; at the current rate it would finish near "
+            f"{store.amount(projected)} of its {store.amount(target)} target.{note}")
 
 
 def _problems_paragraph(store, diagnoses, ideas):
@@ -153,8 +164,8 @@ def generate_digest(day=None, hour=None, store=None):
         f"Watch, but don't act yet: {_join(drifting)} {'is' if len(drifting) == 1 else 'are'} "
         f"slipping without a clear cause." if drifting else None,
         _wins_paragraph(store, day, hour, pace),
-        "Today: " + _join(f"the {t['line']} line sold {t['units_sold_today']} of an expected "
-                          f"{t['expected_by_now']:.0f}" for t in weak_lines) + "."
+        "Today: " + _join(f"the {t['line']} line sold {store.amount(t['units_sold_today'])} of an "
+                          f"expected {store.amount(t['expected_by_now'])}" for t in weak_lines) + "."
         if weak_lines else None,
         _tomorrow_paragraph(store, day),
         _last_piece_paragraph(stock.get_last_piece_alerts(day, hour, store=store))

@@ -151,13 +151,13 @@ def test_forgiving_uploads():
     bad.loc[bad.index[0], "units"] = "five"
     bad.loc[bad.index[1], "hour"] = "lunch"
     try:
-        build_store(targets.assign(target=0), bad)
+        build_store(targets, bad)
     except StoreDataError as e:
-        assert len(e.problems) == 3, e.problems
+        assert len(e.problems) == 2, e.problems
     else:
         raise AssertionError("expected problems")
     print("\nForgiving uploads: '2 PM', '1,200', lower-case names, an unknown category, next-morning "
-          "stock, a partial month\n  and report titles above the table all read correctly; three "
+          "stock, a partial month\n  and report titles above the table all read correctly; two "
           "problems in one file are reported together.")
 
 

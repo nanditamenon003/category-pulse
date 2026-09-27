@@ -210,6 +210,7 @@ def _start_here():
 
 
 def _problem_row(p, diag):
+    s = current_store()
     tone = STATUS[p["status"]][1]
     evidence = diag["evidence"][1] if len(diag["evidence"]) > 1 and diag["cause"] in (
         "stockout", "broken_size_run") else diag["headline"]
@@ -218,7 +219,7 @@ def _problem_row(p, diag):
         f'{pill(p["status"])}{cause_chip(diag["cause"])}'
         f'<div class="cp-row-name">{esc(p["category"])}</div>'
         f'{progress_bar(p["units_sold_so_far"], p["monthly_target"], p["expected_units_by_now"])}'
-        f'<div class="cp-small">{p["units_sold_so_far"]} of {p["monthly_target"]} · '
+        f'<div class="cp-small">{esc(s.amount(p["units_sold_so_far"]))} of {esc(s.amount(p["monthly_target"]))} · '
         f'{abs(p["pct_vs_pace"]):.0f}% {"behind" if p["pct_vs_pace"] < 0 else "ahead of"} pace · '
         f'{esc(_needs_text(p))}</div>'
         f'<div class="cp-row-text">{esc(evidence)}</div>'
@@ -235,9 +236,13 @@ def _when_dropped(alert):
 
 def _needs_text(p):
     """What it takes from here, or that the month is over."""
+    s = current_store()
+    selling = s.amount(p["actual_units_per_day"], per_day=True)
     if p.get("month_finished"):
-        return f"month finished, sold {p['actual_units_per_day']:.1f}/day"
-    return f"needs {p['needed_units_per_day']:.1f}/day, selling {p['actual_units_per_day']:.1f}/day"
+        return f"month finished, sold {selling}/day"
+    if p["needed_units_per_day"] is None:
+        return f"selling {selling}/day"
+    return f"needs {s.amount(p['needed_units_per_day'], per_day=True)}/day, selling {selling}/day"
 
 
 def _compact_row(tone, title, text):
@@ -264,23 +269,36 @@ def today_page():
     diags = diagnoses_at(hour)
     lines_today = today_at(hour)
 
-    sold = sum(p["units_sold_so_far"] for p in pace)
-    expected = sum(p["expected_units_by_now"] for p in pace)
-    target = sum(p["monthly_target"] for p in pace)
-    projected = sum(p["projected_month_end_if_current_rate_continues"] for p in pace)
+    # Totals compare like with like: only categories with something to judge them by.
+    judged = [p for p in pace if p["monthly_target"]]
+    sold_all = sum(p["units_sold_so_far"] for p in pace)
+    sold = sum(p["units_sold_so_far"] for p in judged)
+    expected = sum(p["expected_units_by_now"] for p in judged)
+    target = sum(p["monthly_target"] for p in judged)
+    projected = sum(p["projected_month_end_if_current_rate_continues"] for p in judged)
     behind = sorted((p for p in pace if p["status"] == "behind"), key=lambda p: p["pct_vs_pace"])
     drifting = sorted((p for p in pace if p["status"] == "drifting"), key=lambda p: p["pct_vs_pace"])
-    today_sold = sum(t["units_sold_today"] for t in lines_today)
-    today_expected = sum(t["expected_by_now"] for t in lines_today)
+    lines_judged = [t for t in lines_today if t["expected_by_now"] is not None]
+    today_sold = sum(t["units_sold_today"] for t in lines_judged)
+    today_expected = sum(t["expected_by_now"] for t in lines_judged)
+    a = s.amount
 
+    if not judged:
+        month_cards = (kpi_card("Month so far", a(sold_all), "no targets to judge by yet")
+                       + kpi_card("Month-end at this rate", "-", "needs targets or 12 days of sales"))
+    elif pace[0]["month_finished"]:
+        month_cards = (kpi_card("Month so far", a(sold), f"of about {a(expected)} expected by now")
+                       + kpi_card("Month result", a(sold), f"of the {a(target)} target"))
+    else:
+        month_cards = (kpi_card("Month so far", a(sold), f"of about {a(expected)} expected by now")
+                       + kpi_card("Month-end at this rate", a(projected), f"target {a(target)} (a projection)"))
     html_block('<div class="cp-kpis">'
-               + kpi_card("Month so far", f"{sold:,}", f"of about {expected:,.0f} expected by now")
-               + (kpi_card("Month result", f"{sold:,}", f"of the {target:,} target")
-                  if pace and pace[0]["month_finished"] else
-                  kpi_card("Month-end at this rate", f"{projected:,}", f"target {target:,} (a projection)"))
+               + month_cards
                + kpi_card("Need action", f"{len(behind)} behind", f"{len(drifting)} drifting",
                           tone="red" if behind else "")
-               + kpi_card("Today so far", f"{today_sold}", f"of about {today_expected:.0f} by now")
+               + (kpi_card("Today so far", a(today_sold), f"of about {a(today_expected)} by now")
+                  if lines_judged else
+                  kpi_card("Today so far", a(sum(t["units_sold_today"] for t in lines_today)), ""))
                + "</div>")
 
     html_block(heading("Needs action now", "tap a category for the full picture"))
@@ -354,20 +372,28 @@ def category_dialog(category):
 
 
 def _why_tab(p, diag):
-    html_block('<div class="cp-kpis">'
-               + kpi_card("Sold this month", f"{p['units_sold_so_far']}", f"of {p['monthly_target']} target")
-               + kpi_card("Expected by now", f"{p['expected_units_by_now']:.0f}",
-                          f"{p['pct_vs_pace']:+.0f}% vs pace")
-               + kpi_card("Selling per day", f"{p['actual_units_per_day']:.1f}",
-                          "the month is over" if p["month_finished"] else
-                          f"needs {p['needed_units_per_day']:.1f}/day to hit target")
-               + (kpi_card("Month result", f"{p['units_sold_so_far']}", f"of {p['monthly_target']} target")
-                  if p["month_finished"] else
-                  kpi_card("Month-end at this rate",
-                           f"{p['projected_month_end_if_current_rate_continues']}",
-                           "a projection, not a result"))
-               + "</div>"
-               + progress_bar(p["units_sold_so_far"], p["monthly_target"], p["expected_units_by_now"]))
+    s = current_store()
+    a = s.amount
+    if not p["monthly_target"]:
+        html_block('<div class="cp-kpis">'
+                   + kpi_card("Sold this month", a(p["units_sold_so_far"]), "no target to judge by yet")
+                   + kpi_card("Selling per day", a(p["actual_units_per_day"], per_day=True), "")
+                   + "</div>")
+    else:
+        html_block('<div class="cp-kpis">'
+                   + kpi_card("Sold this month", a(p["units_sold_so_far"]), f"of {a(p['monthly_target'])} target")
+                   + kpi_card("Expected by now", a(p["expected_units_by_now"]),
+                              f"{p['pct_vs_pace']:+.0f}% vs pace")
+                   + kpi_card("Selling per day", a(p["actual_units_per_day"], per_day=True),
+                              "the month is over" if p["month_finished"] else
+                              f"needs {a(p['needed_units_per_day'], per_day=True)}/day to hit target")
+                   + (kpi_card("Month result", a(p["units_sold_so_far"]), f"of {a(p['monthly_target'])} target")
+                      if p["month_finished"] else
+                      kpi_card("Month-end at this rate",
+                               a(p["projected_month_end_if_current_rate_continues"]),
+                               "a projection, not a result"))
+                   + "</div>"
+                   + progress_bar(p["units_sold_so_far"], p["monthly_target"], p["expected_units_by_now"]))
 
     if p["status"] in ("behind", "drifting"):
         html_block(heading("The evidence"))
@@ -504,6 +530,8 @@ def _tier_table(playbook):
 def pace_chart(pace):
     rows = []
     for p in pace:
+        if not p["monthly_target"]:
+            continue
         expected = p["expected_units_by_now"]
         rows.append({
             "Category": p["category"],
@@ -516,8 +544,8 @@ def pace_chart(pace):
     order = list(df["Category"])
 
     color = alt.Color("Status:N", legend=None, scale=alt.Scale(
-        domain=["Behind", "Drifting", "On pace", "Ahead", "Too early"],
-        range=[RED, AMBER, GREEN, GREEN, NEUTRAL]))
+        domain=["Behind", "Drifting", "On pace", "Ahead", "Too early", "No target"],
+        range=[RED, AMBER, GREEN, GREEN, NEUTRAL, NEUTRAL]))
     y = alt.Y("Category:N", sort=order, title=None,
               axis=alt.Axis(labelLimit=180, labelOverlap=False, grid=False, ticks=False))
     bars = alt.Chart(df).mark_bar(height=14).encode(
@@ -539,12 +567,12 @@ def pace_chart(pace):
 
 
 STATUS_FILTER = {"Behind": "behind", "Drifting": "drifting", "On pace": "on_pace",
-                 "Ahead": "ahead", "Too early": "too_early"}
+                 "Ahead": "ahead", "Too early": "too_early", "No target": "no_target"}
 SORT_ORDERS = {
     "By line": None,
     "Worst first": lambda p: p["pct_vs_pace"],
     "Best first": lambda p: -p["pct_vs_pace"],
-    "Biggest target": lambda p: -p["monthly_target"],
+    "Biggest target": lambda p: -(p["monthly_target"] or 0),
 }
 
 
@@ -564,7 +592,8 @@ def _category_table(shown, filters_key):
             "Category": p["category"],
             "Sold": p["units_sold_so_far"],
             "Target": p["monthly_target"],
-            "Progress": round(p["units_sold_so_far"] / p["monthly_target"] * 100),
+            "Progress": (round(p["units_sold_so_far"] / p["monthly_target"] * 100)
+                         if p["monthly_target"] else None),
             "vs pace": p["pct_vs_pace"],
             "Per day": p["actual_units_per_day"],
             "Needs per day": p["needed_units_per_day"],
@@ -1001,7 +1030,8 @@ def _upload_preview(store, notes):
                + kpi_card("Categories", f"{len(store.categories)}",
                           f"in {lines} line{'s' if lines != 1 else ''} on {floors} floor{'s' if floors != 1 else ''}")
                + kpi_card("Units sold so far", f"{int(store.sales['units_sold'].sum()):,}",
-                          f"against {sum(store.targets.values()):,} for the month")
+                          f"against {sum(t for t in store.targets.values() if t):,} for the month"
+                          if any(store.targets.values()) else "no unit targets yet")
                + "</div>")
 
     if store.warnings:
@@ -1179,6 +1209,8 @@ GUIDE_STATUSES = [
     ("on_pace", "Within 15% of where it should be."),
     ("ahead", "More than 15% over, by more than chance."),
     ("too_early", "Too few units expected so far for a percentage to mean anything."),
+    ("no_target", "No target, no last year's figure, and too few days of sales to compare the "
+                  "category with its own earlier pace yet."),
 ]
 
 GUIDE_TERMS = [

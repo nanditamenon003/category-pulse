@@ -56,27 +56,33 @@ def typical_share_of_day_sold(store, day, hour):
     return float(by_hour.cumsum()[hour] / by_hour.sum())
 
 
-def classify_pace(expected, actual):
+def classify_pace(expected, actual, scale=1.0):
     """
-    Turns expected vs actual units into a status, using business rules from
+    Turns expected vs actual sales into a status, using business rules from
     config.py:
       - MIN_EXPECTED_UNITS_FOR_STATUS: too few units expected -> "too_early"
       - PACE_THRESHOLD_PCT: the 15% line for behind / ahead
       - NORMAL_VARIATION_Z / DRIFTING_Z: the gap must also be bigger than
         ordinary randomness. Past -15% with strong evidence is "behind", with
         some evidence "drifting" (worth watching), otherwise just on pace.
+    `scale` is what one unit is worth in the figures given: 1 for units, the
+    average price for rupees (see Store.scale). No expected figure (None)
+    means there's nothing to judge by: "no_target".
     Returns (status, pct_vs_pace, gap_beyond_normal_variation).
     """
+    if expected is None:
+        return "no_target", 0.0, False
     if expected <= 0:
         return "too_early", 0.0, False
 
     pct = (actual - expected) / expected * 100
     # Unit sales counts naturally vary by about the square root of the
-    # expected number: that's one "normal swing".
-    swings = abs(actual - expected) / math.sqrt(expected)
+    # expected number: that's one "normal swing". A rupee total swings the
+    # same way, counted in units and multiplied by the price.
+    swings = abs(actual - expected) / math.sqrt(expected * scale)
     beyond_noise = swings > NORMAL_VARIATION_Z
 
-    if expected < MIN_EXPECTED_UNITS_FOR_STATUS:
+    if expected / scale < MIN_EXPECTED_UNITS_FOR_STATUS:
         status = "too_early"
     elif pct < -PACE_THRESHOLD_PCT and beyond_noise:
         status = "behind"
@@ -104,6 +110,11 @@ def get_category_pace(day=None, hour=None, category=None, line=None, store=None)
     Returns a list of dicts with actuals, the expected pace, a status, and
     clearly-labelled projections for the rest of the month. Once the month
     is over, "month_finished" is True and nothing more is needed per day.
+
+    Figures are in the store's measure: units, or rupees for a store viewed
+    with store.for_measure("value") ("measure" says which; the key names say
+    "units" either way). A category with nothing to judge it by has status
+    "no_target" and None for its target and everything worked out from it.
     """
     store, day, hour = resolve(store, day, hour)
     _validate_moment(store, day, hour)
@@ -115,7 +126,7 @@ def get_category_pace(day=None, hour=None, category=None, line=None, store=None)
     weights = store.day_weights
     plan_done = ((sum(weights[d] for d in range(1, day)) + weights[day] * share_of_today)
                  / sum(weights.values()))
-    sold_by_category = _as_of(store.sales, day, hour).groupby("category")["units_sold"].sum()
+    sold_by_category = _as_of(store.sales, day, hour).groupby("category")[store.sold_column].sum()
 
     selected = [
         c for c in store.categories
@@ -126,32 +137,36 @@ def get_category_pace(day=None, hour=None, category=None, line=None, store=None)
 
     results = []
     for cat in selected:
-        target = store.targets[cat]
-        sold = int(sold_by_category.get(cat, 0))
-        expected = target * plan_done
-        status, pct, beyond_noise = classify_pace(expected, sold)
+        target = store.active_targets.get(cat)
+        sold = int(round(sold_by_category.get(cat, 0)))
+        expected = target * plan_done if target else None
+        status, pct, beyond_noise = classify_pace(expected, sold, store.scale([cat]))
 
         actual_per_day = sold / days_elapsed
-        still_needed = max(0, target - sold)
-        needs_per_day = 0.0 if month_finished else still_needed / days_remaining
-        unlikely = (not month_finished and still_needed > 0
-                    and needs_per_day > REQUIRED_RATE_STRETCH * actual_per_day)
+        needs_per_day, unlikely = None, False
+        if target:
+            still_needed = max(0, target - sold)
+            needs_per_day = 0.0 if month_finished else still_needed / days_remaining
+            unlikely = (not month_finished and still_needed > 0
+                        and needs_per_day > REQUIRED_RATE_STRETCH * actual_per_day)
 
         results.append({
             "category": cat,
             "line": store.category_line[cat],
             "department": store.category_department[cat],
             "as_of": {"day": day, "hour": hour},
+            "measure": store.measure,
             "monthly_target": target,
+            "target_source": store.target_source.get(store.measure, {}).get(cat, "target"),
             "last_year_units": store.last_year.get(cat),
             "units_sold_so_far": sold,
-            "balance_to_do": sold - target,
-            "expected_units_by_now": round(expected, 1),
+            "balance_to_do": sold - target if target else None,
+            "expected_units_by_now": round(expected, 1) if target else None,
             "pct_vs_pace": round(pct, 1),
             "status": status,
             "gap_beyond_normal_variation": beyond_noise,
             "actual_units_per_day": round(actual_per_day, 1),
-            "needed_units_per_day": round(needs_per_day, 1),
+            "needed_units_per_day": round(needs_per_day, 1) if target else None,
             "unlikely_without_action": unlikely,
             "month_finished": month_finished,
             # A projection, not a fact: assumes the rest of the month keeps the
@@ -303,25 +318,28 @@ def get_today_pace(line=None, day=None, hour=None, store=None):
 
     sales = store.sales
     today_sales = sales[(sales["day"] == day) & (sales["hour"] <= hour)]
-    sold_by_line = today_sales.groupby("line")["units_sold"].sum()
+    sold_by_category = today_sales.groupby("category")[store.sold_column].sum()
 
     lines = [line] if line is not None else list(store.lines)
     results = []
     for ln in lines:
         if ln not in store.lines:
             raise ValueError(f"Unknown line {ln!r}; lines are {list(store.lines)}")
-        line_target = sum(store.targets[c] for c in store.categories_in(line=ln))
+        # Only categories with a target count, on both sides of the comparison.
+        judged = [c for c in store.categories_in(line=ln) if store.active_targets.get(c)]
+        line_target = sum(store.active_targets[c] for c in judged)
         target_today = line_target * today_share_of_month
-        expected = target_today * share_by_now
-        sold = int(sold_by_line.get(ln, 0))
-        status, pct, beyond_noise = classify_pace(expected, sold)
+        expected = target_today * share_by_now if judged else None
+        sold = int(round(sum(sold_by_category.get(c, 0) for c in judged)))
+        status, pct, beyond_noise = classify_pace(expected, sold, store.scale(judged))
         results.append({
             "line": ln,
             "department": store.lines[ln],
             "as_of": {"day": day, "hour": hour},
+            "measure": store.measure,
             "target_today": round(target_today, 1),
             "units_sold_today": sold,
-            "expected_by_now": round(expected, 1),
+            "expected_by_now": round(expected, 1) if judged else None,
             "pct_vs_pace": round(pct, 1),
             "status": status,
             "gap_beyond_normal_variation": beyond_noise,
@@ -469,6 +487,7 @@ _STATUS_LABEL = {
     "on_pace": "on pace",
     "ahead": "AHEAD",
     "too_early": "too early",
+    "no_target": "no target",
 }
 
 

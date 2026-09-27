@@ -35,6 +35,7 @@ STATUS = {
     "on_pace": ("On pace", "green"),
     "ahead": ("Ahead", "green"),
     "too_early": ("Too early", "neutral"),
+    "no_target": ("No target", "neutral"),
 }
 
 CSS = f"""
@@ -504,28 +505,37 @@ def heading(text, sub=""):
 
 
 def category_card(p, show_line=True, cause=None):
-    name = p["category"] if show_line else current_store().category_product[p["category"]]
+    s = current_store()
+    name = p["category"] if show_line else s.category_product[p["category"]]
     tone = STATUS[p["status"]][1]
-    detail = f"{p['pct_vs_pace']:+.0f}% vs pace"
+    if not p["monthly_target"]:
+        detail, of = "nothing to judge by yet", ""
+    else:
+        detail = f"{p['pct_vs_pace']:+.0f}% vs pace"
+        of = f'<span class="cp-of"> / {esc(s.amount(p["monthly_target"]))}</span>'
     if p["status"] in ("behind", "drifting") and p["needed_units_per_day"] > 0:
-        detail += f" · needs {p['needed_units_per_day']:.1f}/day"
+        detail += f" · needs {s.amount(p['needed_units_per_day'], per_day=True)}/day"
     chip = cause_chip(cause) if p["status"] in ("behind", "drifting") else ""
     return (
         f'<div class="cp-card {tone}">{pill(p["status"])}{chip}'
         f'<div class="cp-name">{esc(name)}</div>'
-        f'<div class="cp-num">{p["units_sold_so_far"]}<span class="cp-of"> / {p["monthly_target"]}</span></div>'
+        f'<div class="cp-num">{esc(s.amount(p["units_sold_so_far"]))}{of}</div>'
         f'{progress_bar(p["units_sold_so_far"], p["monthly_target"], p["expected_units_by_now"])}'
         f'<div class="cp-small">{esc(detail)}</div></div>'
     )
 
 
 def line_card(t):
+    s = current_store()
     tone = STATUS[t["status"]][1]
     return (
         f'<div class="cp-card {tone}">{pill(t["status"])}'
         f'<div class="cp-name">{esc(t["line"])} <span class="cp-small">{esc(t["department"])}</span></div>'
-        f'<div class="cp-num">{t["units_sold_today"]}<span class="cp-of"> / {t["expected_by_now"]:.0f}</span></div>'
-        f'<div class="cp-small">sold today / expected by now</div></div>'
+        + (f'<div class="cp-num">{esc(s.amount(t["units_sold_today"]))}<span class="cp-of"> / '
+           f'{esc(s.amount(t["expected_by_now"]))}</span></div>'
+           f'<div class="cp-small">sold today / expected by now</div></div>'
+           if t["expected_by_now"] is not None else
+           '<div class="cp-small">no target to judge today by yet</div></div>')
     )
 
 

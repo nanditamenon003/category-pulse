@@ -37,6 +37,7 @@ HEADLINES = {
     "ahead": "Selling well ahead of plan.",
     "on_track": "On track.",
     "too_early": "Too early in the period to judge.",
+    "no_target": "No target to judge by yet.",
 }
 
 
@@ -52,12 +53,15 @@ def diagnose(category, day=None, hour=None, store=None):
     pace = kpi.get_category_pace(day, hour, category=category, store=store)[0]
     status = pace["status"]
     evidence = [
-        f"Sold {pace['units_sold_so_far']} against {pace['expected_units_by_now']:.0f} expected by "
-        f"now ({pace['pct_vs_pace']:+.0f}% vs pace)."
+        f"Sold {store.amount_of(pace['units_sold_so_far'])} against {store.amount(pace['expected_units_by_now'])} "
+        f"expected by now ({pace['pct_vs_pace']:+.0f}% vs pace)." if pace["monthly_target"] else
+        f"Sold {store.amount_of(pace['units_sold_so_far'])} so far, with no target or earlier sales to "
+        f"compare with yet."
     ]
 
-    if status in ("on_pace", "ahead", "too_early"):
-        cause = {"on_pace": "on_track", "ahead": "ahead", "too_early": "too_early"}[status]
+    if status in ("on_pace", "ahead", "too_early", "no_target"):
+        cause = {"on_pace": "on_track", "ahead": "ahead", "too_early": "too_early",
+                 "no_target": "no_target"}[status]
         return {
             "category": category, "as_of": {"day": day, "hour": hour}, "status": status,
             "pct_vs_pace": pace["pct_vs_pace"], "cause": cause, "headline": HEADLINES[cause],
