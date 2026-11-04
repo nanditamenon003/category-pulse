@@ -128,7 +128,7 @@ header[data-testid="stHeader"] {{ background: {GRADIENT} top / 100% 3px no-repea
 .cp-who {{ font-size: 12px; font-weight: 700; color: {MUTED}; margin: 4px 0 2px; }}
 
 /* Headline numbers */
-.cp-kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }}
+.cp-kpis {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }}
 .cp-kpi {{ background: {CARD}; border: 1px solid {BORDER}; border-radius: 14px; padding: 14px 16px; }}
 .cp-kpi-label {{ font-size: 12px; color: {MUTED}; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }}
 .cp-kpi-num {{ font-size: 31px; font-weight: 800; color: {TEXT}; line-height: 1.2; letter-spacing: -0.02em;
@@ -175,7 +175,7 @@ header[data-testid="stHeader"] {{ background: {GRADIENT} top / 100% 3px no-repea
 /* Clickable cards: an invisible button laid over the whole card. Streamlit gives text
    blocks a negative bottom margin, which made cards overlap the gap below them. */
 [class*="st-key-click_"] {{ position: relative; }}
-[class*="st-key-click_"] [data-testid="stMarkdownContainer"] {{ margin-bottom: 0 !important; }}
+[class*="st-key-click_"] [data-testid="stHtml"] {{ margin-bottom: 0 !important; }}
 [class*="st-key-click_"] [class*="st-key-open_"] {{ position: absolute; inset: 0; margin: 0; z-index: 2;
                                                    width: 100% !important; height: 100% !important; }}
 [class*="st-key-click_"] [class*="st-key-open_"] div,
@@ -632,7 +632,9 @@ def slug(text):
 
 
 def html_block(markup):
-    st.markdown(markup, unsafe_allow_html=True)
+    # st.html, not st.markdown: if a browser fails to fetch the markdown HTML code (it
+    # loads separately, and can fail just after the app wakes), people would see raw code.
+    st.html(markup)
 
 
 def pill(status):

@@ -389,9 +389,13 @@ AI_PROVIDERS = {
         "base_url": "https://api.deepseek.com/anthropic",
         "key_env": "DEEPSEEK_API_KEY",
         "console": "platform.deepseek.com",
+        # Answers come from tool results, so its extra thinking step only doubles the wait.
+        "request_options": {"extra_body": {"thinking": {"type": "disabled"}}},
     },
 }
 AI_MAX_TOKENS = 1500
+# Stop waiting after this long: the provider occasionally stalls for minutes.
+AI_WAIT_SECONDS = 75
 
 # The chat runs on the owner's prepaid AI credit (a question costs a fraction
 # of a US cent). Each signed-in account can ask this many questions a day,

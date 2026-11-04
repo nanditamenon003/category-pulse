@@ -78,9 +78,9 @@ def _icon(name):
 _PREVIEW = """
 <div class="cp-w-visual">
   <div class="cp-w-app">
-    <div class="cp-w-app-top"><img src="{logo}" alt="">Today<span>Sun 24 May, 16:00</span></div>
+    <div class="cp-w-app-top"><img src="{logo}" alt="">Today<span>Sun 24 May, close</span></div>
     <div class="cp-w-kpis">
-      <div><span>Month so far</span><b>2,456</b><em>of about 2,467 expected</em></div>
+      <div><span>Month so far</span><b>2,498</b><em>of about 2,519 expected</em></div>
       <div><span>Month-end</span><b>3,188</b><em>likely 3,146 to 3,231</em></div>
     </div>
     <div class="cp-w-row red"><span class="cp-pill red">Behind</span><span class="cp-chip">Broken size run</span>

@@ -1954,8 +1954,8 @@ def chat_dialog():
         for turn in st.session_state[history_key]:
             _render_turn(turn)
         if not st.session_state[history_key] and not question:
-            st.markdown('<div class="cp-small">Pick a suggested question or type your own. '
-                        'Each answer shows how it was worked out.</div>', unsafe_allow_html=True)
+            html_block('<div class="cp-small">Pick a suggested question or type your own. '
+                       'Each answer shows how it was worked out.</div>')
 
         if question:
             left, everyone_done = usage.questions_left(person)
@@ -1968,14 +1968,25 @@ def chat_dialog():
                         "answer": (f"You've asked your {QUESTIONS_PER_DAY} questions for today. You can "
                                    f"ask more tomorrow; everything else on the site still works.")}
             else:
-                # Show the question with a spinner while the AI works, then swap in the answer.
+                # Show the question with a spinner while the AI works, the answer as it's written,
+                # then swap in the finished turn.
                 waiting = st.empty()
                 with waiting.container():
-                    st.markdown(f'<div class="cp-you">{esc(question)}</div>', unsafe_allow_html=True)
+                    html_block(f'<div class="cp-you">{esc(question)}</div>')
+                    writing, written = st.empty(), []
+
+                    def show_text(text):
+                        if text is None:
+                            written.clear()
+                        else:
+                            written.append(text)
+                        writing.markdown("".join(written))
+
                     with st.spinner("Checking the numbers..."):
-                        answer, calls = agent.ask(question, current_hour=hour, store=store)
+                        answer, calls = agent.ask(question, current_hour=hour, store=store, on_text=show_text)
                 waiting.empty()
-                usage.record_question(person)
+                if not isinstance(answer, agent.NoAnswer):
+                    usage.record_question(person)
                 turn = {"question": question, "answer": answer, "calls": calls}
             st.session_state[history_key].append(turn)
             _render_turn(turn)
@@ -1986,8 +1997,7 @@ def chat_dialog():
 
 
 def _render_turn(turn):
-    st.markdown(f'<div class="cp-you">{esc(turn["question"])}</div>', unsafe_allow_html=True)
-    st.markdown('<div class="cp-who">Category Pulse</div>', unsafe_allow_html=True)
+    html_block(f'<div class="cp-you">{esc(turn["question"])}</div><div class="cp-who">Category Pulse</div>')
     st.markdown(turn["answer"])
     lookups = len(turn["calls"])
     with st.expander(f"How I got this ({lookups} lookup{'s' if lookups != 1 else ''})"):

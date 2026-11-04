@@ -20,16 +20,18 @@ about, and tools for data the store doesn't have are left out.
 
 import json
 import os
+import time
 
 from dotenv import load_dotenv
 
+import diagnosis
 import forecast
 import kpi
 import loyalty
 import plan
 import staffing
 import stock
-from config import AI_MAX_TOKENS, AI_PROVIDER, AI_PROVIDERS, MAX_TOOL_ITERATIONS
+from config import AI_MAX_TOKENS, AI_PROVIDER, AI_PROVIDERS, AI_WAIT_SECONDS, MAX_TOOL_ITERATIONS
 from store import MISSING_LABEL, resolve
 
 load_dotenv()
@@ -84,6 +86,8 @@ How the store is organised:
 - Targets are monthly. Pace is month-to-date: units sold so far vs what the target implies by \
 now. Statuses: behind; drifting (slipping, but could still be normal ups and downs); on_pace; \
 ahead; too_early (too few units expected to judge); no_target (nothing to judge it by yet). \
+The app shows drifting as "Watch" and on_pace as "On track". Write only those words: never \
+write "drifting" or "on_pace", not even in brackets, and don't mention tools or the pop-up. \
 Pace results say what their figures are in ("measure": units or value, i.e. rupees; the key \
 names say "units" either way) and where each target came from ("target_source": the store's \
 own target, a share of a floor, line or store target, the other measure at the average price, \
@@ -96,12 +100,11 @@ a tool fails or has no data, say so plainly instead of guessing.
 2. Keep actual numbers separate from projections, and label projections as such ("if the \
 current rate continues..."). Never assume what a future delivery will contain: if past \
 deliveries came without some sizes, say so, and don't promise the next one will fix it.
-3. When a category is behind or drifting, investigate before answering with the tools you have: \
-its stock health (check_size_runs), its deliveries (get_stock_history), and visitors vs buyers \
-(get_conversion_metrics). Name the cause: a stockout; a broken size run (core sizes gone while \
-the shelf still looks full, which is different from a stockout); a traffic problem (fewer \
-visitors); a conversion problem (normal visitors, fewer buying); or no clear cause. Don't \
-overstate weak evidence such as "drifting", "possible_dip" or "too_few_sales_to_judge".
+3. When asked why a category is behind or slipping, start with get_category_diagnosis: it's the \
+same finding the app shows on that category's pop-up, so use its cause, status and action, and \
+don't contradict it. Go further with its stock health (check_size_runs), deliveries \
+(get_stock_history) or visitors vs buyers (get_conversion_metrics) only if asked for more. \
+Don't overstate weak evidence such as "possible_dip" or "too_few_sales_to_judge".
 4. End every diagnosis with one concrete action the team can take on the floor today or \
 tomorrow.
 5. Cross-selling and loyalty targeting are at tier level only (Platinum, Gold, Silver, \
@@ -153,6 +156,11 @@ def build_tools(store):
             "description": f"Store hour slot ({store.hours[0]}-{store.hours[-1]}). Omit for now."}
 
     tools = [
+        _tool("get_category_diagnosis",
+              "Why one category is where it is: its status, the likely cause, the evidence and one "
+              "action. The same finding the app shows on the category's pop-up, so use this first "
+              "for any 'why' question.",
+              {"category": category()}, ["category"]),
         _tool("get_category_pace",
               "Month-to-date pace for all categories, or one category or line: units sold, expected "
               "by now, % vs pace, status, units per day needed vs actual, and a labelled month-end "
@@ -241,6 +249,11 @@ def _requests_for_agent(r):
     return {k: v for k, v in r.items() if k != "categories"} | {"urgent": urgent, "routine_top_up": routine}
 
 
+def _diagnosis_for_agent(d):
+    """The pop-up's finding, with the status in the words the pop-up shows."""
+    return d | {"status": {"drifting": "Watch", "on_pace": "On track"}.get(d["status"], d["status"])}
+
+
 def _plan_for_agent(p):
     """The plan without the full top-up list (the request tool has it), to keep the answer short."""
     if p.get("stock"):
@@ -259,6 +272,8 @@ def _build_tool_dispatch(current_hour, store):
 
     day, now, s = store.today_day, current_hour, store
     return {
+        "get_category_diagnosis": lambda category:
+            _diagnosis_for_agent(diagnosis.diagnose(category, day, now, store=s)),
         "get_category_pace": lambda category=None, line=None, hour=None:
             kpi.get_category_pace(day, at(hour), category=category, line=line, store=s),
         "get_today_pace": lambda line=None, hour=None:
@@ -301,29 +316,36 @@ def get_client():
             f"No {PROVIDER['key_env']} found. Add your {PROVIDER['name']} API key to the .env "
             f"file (see .env.example), then restart the app."
         )
+    # One retry for a passing network problem; the wait itself is limited in ask().
     if PROVIDER["base_url"]:
-        return Anthropic(api_key=api_key, base_url=PROVIDER["base_url"])
-    return Anthropic(api_key=api_key)
+        return Anthropic(api_key=api_key, base_url=PROVIDER["base_url"], max_retries=1)
+    return Anthropic(api_key=api_key, max_retries=1)
 
 
-def ask(question, current_hour=None, client=None, store=None):
+class NoAnswer(str):
+    """A friendly message in place of an answer: the AI couldn't be reached, so no question is used up."""
+
+
+def ask(question, current_hour=None, client=None, store=None, on_text=None):
     """
     Sends a question to the model with tools enabled, runs the tool-call loop
     until it has a final answer, and returns (answer_text, tool_call_log).
     tool_call_log lists {"tool", "input", "result"} in call order, for the
-    app's "How I got this" trace.
+    app's "How I got this" trace. `on_text`, if given, receives the answer as
+    it's written, and None when what's been written so far should be cleared
+    (it was only a note before looking something up).
 
-    Never raises for ordinary failures (missing key, no credit, network):
-    those come back as a friendly answer with an empty trace.
+    Never raises for ordinary failures (missing key, no credit, network, a
+    stalled provider): those come back as a friendly NoAnswer.
     """
-    from anthropic import APIError
+    from anthropic import APIError, APITimeoutError
 
     tool_call_log = []
     try:
         if client is None:
             client = get_client()
     except AgentError as e:
-        return str(e), tool_call_log
+        return NoAnswer(e), tool_call_log
 
     store, _, current_hour = resolve(store, hour=current_hour)  # the Sample Store unless given
     dispatch = _build_tool_dispatch(current_hour, store)
@@ -331,20 +353,32 @@ def ask(question, current_hour=None, client=None, store=None):
     tools = build_tools(store)
     messages = [{"role": "user", "content": question}]
 
+    give_up_at = time.monotonic() + AI_WAIT_SECONDS
+
     def call_model():
-        return client.messages.create(
+        left = give_up_at - time.monotonic()
+        if left <= 0:
+            raise APITimeoutError(request=None)
+        with client.with_options(timeout=left).messages.stream(
             model=PROVIDER["model"],
             max_tokens=AI_MAX_TOKENS,
             system=system,
             tools=tools,
             messages=messages,
-        )
+            **PROVIDER.get("request_options", {}),
+        ) as stream:
+            for text in stream.text_stream:
+                if on_text:
+                    on_text(text)
+            return stream.get_final_message()
 
     try:
         response = call_model()
         rounds = 0
         while response.stop_reason == "tool_use" and rounds < MAX_TOOL_ITERATIONS:
             rounds += 1
+            if on_text:
+                on_text(None)
             messages.append({"role": "assistant", "content": response.content})
 
             tool_results = []
@@ -372,10 +406,13 @@ def ask(question, current_hour=None, client=None, store=None):
             answer = "I wasn't able to reach a final answer for that. Try rephrasing the question."
         return answer, tool_call_log
 
+    except APITimeoutError:
+        return NoAnswer(f"{PROVIDER['name']} is taking too long to answer right now, so I stopped waiting. "
+                        f"This didn't use up a question: please ask again in a minute."), tool_call_log
     except APIError as e:
-        return _friendly_api_error(e), tool_call_log
+        return NoAnswer(_friendly_api_error(e)), tool_call_log
     except Exception as e:
-        return f"Something went wrong talking to {PROVIDER['name']}: {e}", tool_call_log
+        return NoAnswer(f"Something went wrong talking to {PROVIDER['name']}: {e}"), tool_call_log
 
 
 def _friendly_api_error(error):

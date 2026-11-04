@@ -32,7 +32,7 @@ from ui import ASSETS, CSS, current_hour, esc, html_block, logo_uri, prepare_ses
 
 st.set_page_config(page_title="Category Pulse", page_icon=Image.open(ASSETS / "icon-128.png"), layout="wide",
                    initial_sidebar_state="collapsed")
-st.markdown(CSS, unsafe_allow_html=True)
+st.html(CSS)
 
 # --- Signed out: only the welcome page -------------------------------------------------------
 signed_in = account.is_signed_in()
