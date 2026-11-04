@@ -127,8 +127,9 @@ def read_upload(files, extras=None, remembered=None, earlier=None):
     """
     tables, notes = smart_import.find_tables(files, remembered)
     if not tables:
-        raise StoreDataError("No tables were found in the file. It needs at least your sales: a row of "
-                             "headings (like Date, Category and Units), then one row per sale.")
+        raise StoreDataError([str(n) for n in notes] or [
+            "No tables were found in the file. It needs at least your sales: a row of headings (like "
+            "Date, Category and Units), then one row per sale."])
     store, more, _ = build(tables, extras, earlier)
     return store, notes + more
 

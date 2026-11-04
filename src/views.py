@@ -111,7 +111,7 @@ def _not_in_data(what, add):
 
 WELCOME_STEPS = [
     ("Bring in your numbers",
-     "Upload your sales as your till system exports them. Targets, stock and visitor counts are "
+     "Upload your sales report from your till system. Targets, stock and visitor counts are "
      "optional, and each one adds more."),
     ("See what needs action",
      "Every category gets a status against its monthly target, and the ones genuinely behind come "
@@ -1369,7 +1369,7 @@ def _reading(files, layouts=None):
     except StoreDataError as e:
         return {"files": files, "tables": [], "notes": [], "ok": False, "problems": e.problems}
     if not tables:
-        return {"files": files, "tables": [], "notes": notes, "ok": False, "problems": [
+        return {"files": files, "tables": [], "notes": notes, "ok": False, "problems": [str(n) for n in notes] or [
             "No tables were found in the file. It needs at least your sales: a row of headings (like "
             "Date, Category and Units), then one row per sale."]}
     return {"files": files, "tables": tables, "notes": notes}
@@ -1698,8 +1698,9 @@ def _step_heading(number, text, sub=""):
 def your_data_page():
     guest = account.is_guest()
     mine = st.session_state.get("my_store")
-    page_title("Your data", "Upload your sales as your till system exports them. Stock, targets and "
-                            "visitor counts are optional: each one switches on more of the app.")
+    page_title("Your data", "Upload your sales report from your till system. The columns are worked out for "
+                            "you, and you can correct anything read wrongly. Stock, targets and visitor counts "
+                            "are optional: each one switches on more of the app.")
 
     if guest:
         html_block('<div class="cp-panel"><p>You\'re looking around the <b>Sample Store</b>: a made-up '

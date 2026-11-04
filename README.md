@@ -9,9 +9,9 @@
 ## Why a store manager would use it
 
 - **The morning huddle, done.** **Tomorrow's plan** puts it on one page: what tomorrow needs to sell to keep the month on course, the few categories to focus on with one thing to do and what to say at the till, the sizes to request, and how many people to put on each floor at the busy hour. One tap shares it to the team's WhatsApp group.
-- **The evening spreadsheet, replaced.** The end-of-day report is already calculated, checked and explained, as a short message for the area manager.
-- **Problems caught days earlier, with the reason.** A category with plenty of stock but no 32 or 34 waists is flagged as a broken size run the day it happens, not a week later when the total finally drops. Stock that isn't selling is flagged too, with the money tied up in it.
-- **It reads the reports the store already has.** Upload the till system's sales export as it comes: no template, no retyping.
+- **The evening spreadsheet, done for you.** The end-of-day report is already calculated, checked and explained, as a short message for the area manager.
+- **Problems caught days earlier, with the reason.** A category with plenty of stock but no 32 or 34 waists is flagged as a broken size run the day the stock report shows it, not a week later when the total finally drops. Stock that isn't selling is flagged too, with the money tied up in it.
+- **It reads the reports the store already has.** Upload the till system's sales report: no template and no retyping, though someone does upload it each day. The app shows how it read each column, so anything it gets wrong can be corrected.
 
 ## What it does
 
@@ -26,7 +26,7 @@
 | **Sell** | For each category that's behind, short steps for the till: what to show, what to suggest with it, and which offer each loyalty tier is likeliest to say yes to. |
 | **Summary** | The evening report as a WhatsApp message, the full plain-English summary, and a contribution report that checks its own totals. |
 | **AI chat** | Ask anything ("why is womenswear behind: traffic or conversion?"). The AI answers by calling the same tools, and a **"How I got this"** panel shows every lookup and number it used. |
-| **Your own data** | Upload your store's exports in whatever shape they come; judge pace in units or rupees. See below. |
+| **Your own data** | Upload your store's reports with no template; judge pace in units or rupees. See below. |
 
 ## Tested, not just claimed
 
@@ -81,7 +81,8 @@ Category Pulse is a layer on top of the store's existing system, not a replaceme
 Managers rarely have a tidy spreadsheet in a template's format, so the **Your data** page takes what they do have.
 
 - **Only sales are required:** a date, a category and units sold, one row per bill line or per day. Rupee values, sizes, times and bill numbers each add more. Stock reports, targets, visitor counts and loyalty tier figures are optional extra files or sheets.
-- **Any export works as it comes.** The app finds the table under a report title, works out whether each sheet is sales, stock, targets or visitors, and works out each column from the words shops use ("Qty", "Net Amt", "Bill No", "Sub Category", "SOH", "Target Value"...). A Men/Women column beside the real category becomes the floor. It drops Grand Total rows, takes each sale's hour from the bill time, counts bills, keeps the latest month, and reads a single stock report run the next morning as the previous close. The page shows **how it read each column**, with a dropdown to change any of it, and remembers the choices for next month's file.
+- **Most reports can be read as they come.** The app finds the table under a report title, works out whether each sheet is sales, stock, targets or visitors, and works out each column from the words shops use ("Qty", "Net Amt", "Bill No", "Sub Category", "SOH", "Target Value"...). A Men/Women column beside the real category becomes the floor. It drops Grand Total rows, takes each sale's hour from the bill time, counts bills, keeps the latest month, and reads a single stock report run the next morning as the previous close. The page shows **how it read each column**, with a dropdown to change any of it, and remembers the choices for next month's file. This has been tested on made-up reports in many layouts, **not yet on a real till export**, so the first real file is still the real test. Pivot-style reports (dates or categories across the top) aren't read: the app says so and asks for the detailed report. An older `.xls` file needs saving as `.xlsx` first.
+- **Everyday files don't mislead.** Today's report on its own joins the saved month instead of replacing it. A month-to-date summary is read as month totals, with no made-up figure for a single day. Stock names that don't match sales are flagged, never called sold out. Dates written month-first are spotted and said. A target that looks wrong (a rupee figure in the units box) is questioned. Festival or sale days, typed in, raise the plan on those days. Data more than a day old says how old it is on every page.
 - **Targets in whatever form they exist:** per category, per floor, per line or one number for the whole store, in units, rupees or both; typed on the upload page; or none. Floor and store targets are shared across categories by how each sold before the last week (so one slipping category still shows), and labelled as estimates. With no target, a category is judged against **last year's sales** for the month (read from the same file if it goes back a year) or, failing that, against **its own pace earlier in the month**. Every screen says which yardstick it's using.
 - **Units or rupees:** the switch at the top judges every category's pace in units or rupees. Rupees are shown as shops say them: ₹45,000, ₹2.45 L, ₹1.20 Cr.
 - Ordinary spreadsheet habits are fine: numbers like 1,200, times like 2 PM, names in different capitals, returns as negative units. Every problem in a file is listed at once, and anything a page can't show is explained ("Not in your data: stock counts..."), never guessed.
@@ -164,6 +165,8 @@ Each module can also be run on its own and prints its own checks, e.g. `python s
 - `test_plan.py`: the month-end range is honest; the sold-out and broken-size categories come first in the plan and the request; a bare store gets a plan that says less rather than guessing.
 - `test_slow_stock.py`: slow stock stays slow; the blazers are named a slow seller; the run-out watch list is fair.
 - `test_storage.py`: saved data is scrambled at rest, visible only to its owner, and gone after delete.
+- `test_wrong_answers.py`: everyday files that used to give a confident wrong answer (today's report alone, a month-to-date summary, mismatched stock names, month-first dates, festival days, odd targets) and report layouts such as tab-separated files, "₹1,499.00" amounts and pivots.
+- `test_chat_flow.py`: with no AI or network, the chat's answer arrives as it's written, it uses the same diagnosis as the pop-up, and a stalled provider gets a plain message.
 
 ### Deploying (Streamlit Community Cloud, free)
 
@@ -178,7 +181,7 @@ category-pulse/
 ├── src/
 │   ├── config.py         all business rules and settings in one place (thresholds, AI provider), plus the Sample Store
 │   ├── store.py          a store: its lines, targets, sizes, calendar and data; builds the Sample Store or any store's own tables
-│   ├── smart_import.py   reads any export: finds tables, works out columns, picks the month, finds last year
+│   ├── smart_import.py   reads store reports: finds tables, works out columns, picks the month, finds last year
 │   ├── upload.py         turns an upload into a store; the Excel template and the sample file
 │   ├── generate_data.py  simulates the store month: sales, stock, deliveries, footfall, loyalty tiers
 │   ├── kpi.py            month-to-date pace, today's pace, contribution report, footfall, traffic vs conversion
@@ -209,7 +212,7 @@ category-pulse/
 
 ## Design choices in brief
 
-- **Every number comes from the data.** The AI must call tools before answering and may not estimate. Projections are always labelled as projections, and tested (see above).
+- **Numbers come from the data.** The AI can only see figures through tools, is told not to estimate, and every answer lists the lookups behind it so it can be checked. That lowers the risk of a wrong figure without removing it: the sums are done by tested code, but the wording is still written by an AI. Projections are always labelled as projections, and tested (see above).
 - **Plain words for the floor.** "21% behind", "12 in every 100 visitors bought", "5-8 pm", "put 3 people on Menswear": written for the people who act on it, not for analysts.
 - **Status before numbers.** Green, amber and red mean status only, always with a word label (so it works for colour-blind users). Buttons and links use one accent, the violet from the logo; the logo's full gradient is kept for brand touches, so it's never mistaken for a status. Built to be read on a phone.
 - **Privacy by design.** Loyalty targeting works at tier level (Platinum, Gold, Silver, not a member); no individual customer data exists anywhere in the project. Only the columns in use are kept from an upload, encrypted when saved, and the AI sees a store's figures only after a clear yes.
@@ -217,8 +220,12 @@ category-pulse/
 
 ## Limitations
 
-- The Sample Store is simulated. Uploads work for any store, one month at a time (the latest month in the file). Column guesses cover common retail wording; anything unusual can be set with the dropdowns, once.
+- The Sample Store is simulated, and **no real store has used the app or tried a real till export yet**. All testing is on simulated stores and made-up reports.
+- Uploads work one month at a time (the latest month in the file). Column guesses cover common retail wording; anything unusual can be set with the dropdowns, once. Pivot-style reports and `.xls` files aren't read.
+- It's upload-only: someone has to upload the report each day. There's no automatic feed from the till system, no alerts that reach you outside the app, no team logins and no view across several stores.
+- A month-to-date summary gives real month figures but no single-day detail. Festival periods have to be typed in. The app doesn't compare with last month.
+- Free hosting can put the app to sleep when nobody has visited for a while, so the first visitor may have to wake it.
 - Uploaded data is read as at the close of its latest day. Stock alerts are only as detailed as the stock counts supplied (a daily count gives "by today's close", not the hour).
 - When core sizes aren't given, they're learned from sales, which can pick the wrong sizes when sales are few. The upload page shows them so they can be checked.
 - Projections assume the rest of the month keeps its pace. Targets shared out from a floor or store total, or taken from last year or a category's own earlier pace, are estimates, and the screens say so.
-- On uploaded data, the AI chat sends the figures it looks up to DeepSeek (after asking), which suits dummy data and demos. A real-data pilot would need the store's approval and an AI provider the company approves. Each question is answered on its own (no conversation memory), usually in about 10 seconds. If the provider stalls, the app stops waiting after 75 seconds and says so, and that question isn't counted.
+- On uploaded data, the AI chat sends the figures it looks up to DeepSeek (after asking), which suits dummy data and demos. A real-data pilot would need the store's approval and an AI provider the company approves. Each question is answered on its own (no conversation memory), usually in 10 to 15 seconds (timed on a handful of questions). If the provider stalls, the app stops waiting after 75 seconds and says so, and that question isn't counted.

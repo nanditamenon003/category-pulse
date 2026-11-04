@@ -41,10 +41,10 @@ _ICON = {
 FEATURES = [
     ("early", "Catch problems early",
      "Every category tracked against its monthly target, with real problems told apart from normal "
-     "ups and downs, so the team acts days sooner."),
+     "ups and downs, so the team can act sooner."),
     ("sizes", "Spot missing sizes",
      "A full-looking shelf can hide sold-out core sizes. Category Pulse flags broken size runs and "
-     "the last piece of a size the moment it happens."),
+     "last pieces as soon as your stock report shows them."),
     ("why", "Know why it's slipping",
      "Sold out, missing sizes, fewer shoppers or fewer buyers: the likely cause, with the evidence, "
      "and one clear thing to do."),
@@ -52,16 +52,16 @@ FEATURES = [
      "What tomorrow needs to sell, which categories to push, what to request, and where to put the "
      "team at the busy hour."),
     ("share", "Reports ready for WhatsApp",
-     "The evening report and the morning huddle plan as short messages. Copy, share, done: no more "
-     "evening spreadsheet."),
+     "The evening report and the morning huddle plan as short messages. Copy and share, instead of "
+     "building the evening spreadsheet."),
     ("private", "Your data stays yours",
      "Only the columns the app needs are kept, encrypted, visible only to your account, and "
      "deletable any time."),
 ]
 
 STEPS = [
-    ("Upload your sales", "Your till system's export, as it comes, Excel or CSV. Add stock or targets "
-                          "if you have them; the app works with whatever you've got."),
+    ("Upload your sales", "Your till report, Excel or CSV. The columns are worked out for you, and you "
+                          "can correct anything. Add stock or targets if you have them."),
     ("See what needs action", "Every category gets a status, a likely cause and a next step, in units "
                               "or rupees, with a month-end forecast."),
     ("Share the plan", "Send tomorrow's plan to the team and the evening report to your area manager, "

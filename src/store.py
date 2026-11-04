@@ -456,10 +456,11 @@ def _normal_name(text):
 
 
 def _clean_number_text(values):
-    """'1,200', '₹ 3,400', 'Rs. 500' -> numbers; blanks stay blank."""
-    if values.dtype != object:
+    """'1,200', '₹ 3,400', 'Rs. 500', '(2)' for a return -> numbers; blanks stay blank."""
+    if pd.api.types.is_numeric_dtype(values):
         return values
     text = values.astype(str).str.replace(r"(?i)rs\.?|₹|,|\s", "", regex=True)
+    text = text.str.replace(r"^\((.*)\)$", r"-\1", regex=True)
     return text.where(values.notna() & (text != ""))
 
 

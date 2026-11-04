@@ -31,6 +31,7 @@ import plan  # noqa: E402
 import smart_import  # noqa: E402
 import stock  # noqa: E402
 import upload  # noqa: E402
+from store import StoreDataError  # noqa: E402
 
 CATEGORIES = ("Polos", "Shirts", "Chinos", "Kurtas")
 TARGETS = pd.DataFrame({"Category": CATEGORIES, "Target": [130, 130, 130, 130]})
@@ -251,7 +252,49 @@ def test_csv_oddities_do_not_crash():
     print("A UTF-16 CSV (a common Excel export) is read.")
 
 
+def layout(**columns):
+    return pd.DataFrame(columns)
+
+
+def test_report_layouts():
+    frame = sales()
+    dates, cats, qty, net = frame["Date"], frame["Category"], frame["Qty"], frame["Net Amt"]
+    units = int(qty.sum())
+
+    def reads_right(name, data):
+        store, _ = upload.read_upload([(name, data)])
+        assert int(store.sales["units_sold"].sum()) == units and store.today_day == 20 and not store.summary_only, name
+        return store
+
+    # Amounts as shops write them, in a file where they arrive as text.
+    rupees = layout(Date=dates, Category=cats, Qty=qty.map(str), **{"Net Sales": net.map(lambda v: f"₹{v:,.2f}")})
+    assert reads_right("r.csv", csv(rupees)).sales["value"].sum() == net.sum()
+    commas = layout(Date=dates, Category=cats, Qty=qty.map(lambda q: f"{q * 1000:,}"))
+    assert upload.read_upload([("r.csv", csv(commas))])[0].sales["units_sold"].sum() == units * 1000
+    print("Amounts like ₹2,998.00 and 1,000 are read.")
+
+    plain_table = layout(Date=dates, Category=cats, Qty=qty)
+    reads_right("r.csv", plain_table.to_csv(index=False, sep="\t").encode())
+    reads_right("r.csv", plain_table.to_csv(index=False, sep=";").encode())
+    print("Tab-separated and semicolon files are read.")
+
+    # A heading it doesn't know must not turn dated rows into "totals with no date".
+    odd = layout(**{"BILL DT.": dates, "CATEGORY NAME": cats, "QTY.": qty})
+    reads_right("r.csv", csv(odd))
+    print("An unusual date heading is recognised from the dates under it.")
+
+    # Dates across the top: a clear no, saying what to do, rather than a wrong answer.
+    pivot = frame.pivot_table(index="Category", columns="Date", values="Qty", aggfunc="sum").reset_index()
+    try:
+        upload.read_upload([("r.csv", csv(pivot))])
+        raise AssertionError("a pivot should be refused")
+    except StoreDataError as e:
+        assert "pivot" in e.problems[0], e.problems
+    print("A pivot is refused, and it says which report to export instead.")
+
+
 if __name__ == "__main__":
+    test_report_layouts()
     test_a_days_report_joins_the_saved_month()
     test_a_new_month_starts_afresh()
     test_month_to_date_summary()

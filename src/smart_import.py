@@ -87,7 +87,8 @@ _WORDS = {
     "date": (["date", "bill date", "invoice date", "sale date", "sales date", "transaction date",
               "txn date", "doc date", "document date", "posting date", "day", "bill datetime",
               "invoice datetime", "created at", "timestamp", "date counted", "count date",
-              "stock date", "as on date", "as of date"], [("date",)], ["update", "birth", "dob"]),
+              "stock date", "as on date", "as of date", "bill dt", "invoice dt", "inv dt", "txn dt",
+              "doc dt"], [("date",)], ["update", "birth", "dob"]),
     "hour": (["hour", "time", "bill time", "invoice time", "hour slot", "time slot", "hour counted"],
              [("time",), ("hour",)], ["date"]),
     "product": (["category", "product type", "product category", "item category", "article type",
@@ -204,6 +205,18 @@ def _sold_field(column):
     return None
 
 
+_LOOKS_LIKE_A_DATE = re.compile(r"^\s*(\d{1,4}[-/.]\d{1,2}[-/.]\d{2,4}|\d{1,2}[ -][A-Za-z]{3,9}[ -]\d{2,4})")
+
+
+def _column_of_dates(columns, mapping, df):
+    """A column not yet used whose values are nearly all dates, whatever its heading says."""
+    for c in columns:
+        values = df[c].dropna().astype(str)
+        if mapping[c] is None and len(values) and values.str.match(_LOOKS_LIKE_A_DATE).mean() >= 0.8:
+            return c
+    return None
+
+
 def guess_columns(role, columns, df=None):
     """{column: field or None} for a table in `role`: each field goes to its best-fitting column."""
     mapping = {c: None for c in columns}
@@ -238,6 +251,11 @@ def guess_columns(role, columns, df=None):
                     and 2 <= df[c].nunique() <= 6:
                 mapping[c] = "department"
                 break
+    if df is not None and role in ("sales", "stock", "visitors") and "date" not in mapping.values():
+        # An unusual heading shouldn't turn a file of dated rows into "totals with no date".
+        dates = _column_of_dates(columns, mapping, df)
+        if dates is not None:
+            mapping[dates] = "date"
     return mapping
 
 
@@ -301,6 +319,13 @@ def _find_header(rows, role_known=False):
     return None
 
 
+def _separator(text):
+    """Comma, unless the typical line has more tabs, semicolons or pipes (some systems export those)."""
+    lines = [line for line in text.splitlines()[:30] if line.strip()]
+    typical = {s: sorted(line.count(s) for line in lines)[len(lines) // 2] if lines else 0 for s in ",\t;|"}
+    return max(typical, key=lambda s: (typical[s], s == ","))
+
+
 def _read_csv(name, data):
     """A CSV file as a table of cells, whatever its encoding."""
     encodings = ("utf-16",) if data[:2] in (b"\xff\xfe", b"\xfe\xff") else ("utf-8-sig", "cp1252")
@@ -313,7 +338,8 @@ def _read_csv(name, data):
     else:
         raise StoreDataError(f"{name} couldn't be read as text.")
     try:
-        rows = [row for row in csv.reader(io.StringIO(text, newline="")) if any(cell.strip() for cell in row)]
+        rows = [row for row in csv.reader(io.StringIO(text, newline=""), delimiter=_separator(text))
+                if any(cell.strip() for cell in row)]
     except csv.Error:
         raise StoreDataError(f"{name} couldn't be read as a CSV file. Open it in Excel and save it as "
                              f"Excel (.xlsx) or CSV, then upload that.")
@@ -335,7 +361,8 @@ def _sheets(files):
         elif lower.endswith(".csv"):
             out.append((name, None, _read_csv(name, data)))
         else:
-            raise StoreDataError(f"{name} isn't an Excel (.xlsx) or CSV file.")
+            raise StoreDataError(f"{name} isn't an Excel (.xlsx) or CSV file. If it's an older .xls file, "
+                                 f"open it in Excel and save it as .xlsx.")
     return out
 
 
@@ -382,7 +409,9 @@ def find_tables(files, remembered=None):
         if at is None and name_role == "settings" and raw.shape[1] >= 2:
             df = pd.DataFrame([r[:2] for r in rows], columns=["Setting", "Value"])
         elif at is None:
-            notes.append(Important(f"{label} was left out: its column headings couldn't be found."))
+            notes.append(Important(f"{label} was left out: it has no row of headings like Date, Category and "
+                                   f"Qty. If it's a summary with dates or categories across the top (a pivot), "
+                                   f"export the detailed report instead, with one row per sale or per day."))
             continue
         else:
             if at > 0:
