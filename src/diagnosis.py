@@ -72,7 +72,7 @@ def diagnose(category, day=None, hour=None, store=None):
             "evidence": evidence, "action": None,
         }
 
-    health = stock.check_size_runs(category, day, hour, store=store) if store.has_stock else None
+    health = stock.check_size_runs(category, day, hour, store=store) if store.stock_known(category) else None
     can_read_shoppers = store.has_footfall and store.has_transactions
     conversion = (kpi.get_conversion_metrics(category=category, day=day, hour=hour, store=store)
                   if can_read_shoppers else None)
@@ -127,8 +127,8 @@ def diagnose(category, day=None, hour=None, store=None):
             f"{baseline['conversion_rate_pct']}% earlier this month."
         )
     if health is None:
-        evidence.append("This data has no stock counts, so empty shelves or missing sizes can't be "
-                        "checked.")
+        evidence.append("This data has no stock counts for it, so empty shelves or missing sizes can't "
+                        "be checked.")
 
     if cause in ("stockout", "broken_size_run"):
         history = stock.get_stock_history(category, day, hour, store=store)

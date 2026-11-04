@@ -374,7 +374,7 @@ def current_store():
 
 # Saved choices that only make sense for one store, cleared when the store in use changes.
 _STORE_SPECIFIC_KEYS = ("hour", "cat_department", "sell_category", "chat_chip", "measure")
-_UPLOAD_KEYS = ("my_store", "upload_result", "upload_key", "upload_files", "saved_at", "save_note")
+_UPLOAD_KEYS = ("my_store", "upload_result", "upload_key", "upload_files", "saved_at", "save_note", "saved_files")
 
 
 def request_forget():
@@ -410,7 +410,7 @@ def current_hour():
     """The hour slot the whole app is looking at (10 = 10:00-11:00 ... 19 = 19:00-20:00)."""
     s = current_store()
     if st.session_state.get("hour") not in s.hours:
-        st.session_state["hour"] = s.default_hour
+        st.session_state["hour"] = s.hours[-1]  # the close, so every page tells the same story
     return st.session_state["hour"]
 
 
@@ -478,7 +478,7 @@ def _staffing(s, day):
 
 def _category_detail(s, category, hour):
     """Everything the category pop-up shows; None for parts the store's data can't support."""
-    has_stock = s.has_stock
+    has_stock = s.stock_known(category)
     return {
         "pace": kpi.get_category_pace(hour=hour, category=category, store=s)[0],
         "stock": stock.get_stock_status(category, hour=hour, store=s) if has_stock else None,

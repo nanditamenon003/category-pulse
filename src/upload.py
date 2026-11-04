@@ -87,17 +87,18 @@ OFFER_WORDS = {"bundle": "outfit bundle", "percentage_discount": "first-purchase
                "complimentary_service": "free alteration"}
 
 
-def build(tables, extras=None):
+def build(tables, extras=None, earlier=None):
     """
     A Store from the tables found in an upload, as they're currently set
     (smart_import.find_tables, perhaps changed on the upload page), plus any
-    details typed in. Returns (store, notes, files to save: only the columns
-    in use). Raises StoreDataError listing every problem.
+    details typed in. `earlier` is the person's saved month (saved files), which
+    a file for part of that month adds to. Returns (store, notes, files to save:
+    only the columns in use). Raises StoreDataError listing every problem.
     """
-    problems = smart_import.check_choices(tables)
+    problems = smart_import.check_choices(tables, extras)
     if problems:
         raise StoreDataError(problems)
-    canonical, settings, notes = smart_import.canonical_tables(tables, extras)
+    canonical, settings, notes = smart_import.canonical_tables(tables, extras, earlier)
 
     loyalty = canonical["loyalty"]
     if loyalty is not None and "preferred_offer_type" in loyalty.columns:
@@ -110,11 +111,13 @@ def build(tables, extras=None):
         canonical["targets"], canonical["sales"], canonical["stock"], canonical["visitors"], loyalty,
         name=settings.get("name") or "Your store", store_id=f"upload-{fingerprint}",
         sale_days=settings.get("sale_days", ()), delivery_weekday=settings.get("delivery_weekday"),
+        sale_uplift=settings.get("sale_uplift"), summary_only=bool(settings.get("summary_only")),
     )
-    return store, notes, files
+    store.warnings.extend(str(n) for n in notes if isinstance(n, smart_import.Important))
+    return store, [n for n in notes if not isinstance(n, smart_import.Important)], files
 
 
-def read_upload(files, extras=None, remembered=None):
+def read_upload(files, extras=None, remembered=None, earlier=None):
     """
     Reads uploaded files ([(name, bytes)]: any Excel or CSV files, the
     template or the store's own exports) into a Store, with every guess as
@@ -126,7 +129,7 @@ def read_upload(files, extras=None, remembered=None):
     if not tables:
         raise StoreDataError("No tables were found in the file. It needs at least your sales: a row of "
                              "headings (like Date, Category and Units), then one row per sale.")
-    store, more, _ = build(tables, extras)
+    store, more, _ = build(tables, extras, earlier)
     return store, notes + more
 
 

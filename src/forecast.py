@@ -44,7 +44,8 @@ def _normal_cdf(x):
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
 
-def month_end_range(daily, weights_done, share_today, weight_today, weight_after, sold_today=0.0):
+def month_end_range(daily, weights_done, share_today, weight_today, weight_after, sold_today=0.0,
+                    weight_before=0.0):
     """
     The core calculation, on plain numbers (so it can be tested on its own):
       daily         sales on each complete day so far
@@ -53,13 +54,15 @@ def month_end_range(daily, weights_done, share_today, weight_today, weight_after
       weight_today  today's busy-ness (0 if today is already among the complete days)
       weight_after  total busy-ness of the days after today
       sold_today    sales so far today (0 if today is complete or not started)
+      weight_before busy-ness of days before the data starts (a file for part of the
+                    month), assumed to have sold at the same rate
     Returns (likely, low, high, standard deviation) for the month's total, or None with too few days.
     """
     if len(daily) < MIN_DAYS_FOR_RANGE:
         return None
     sold = sum(daily) + sold_today
     w_done = sum(weights_done) + weight_today * share_today
-    w_rest = weight_today * (1 - share_today) + weight_after
+    w_rest = weight_today * (1 - share_today) + weight_after + weight_before
     rate = sold / w_done if w_done else 0.0
     likely = sold + rate * w_rest
     if rate <= 0:
@@ -102,14 +105,15 @@ def get_month_end_range(category=None, line=None, day=None, hour=None, store=Non
     by_day = rows[rows["day"] <= day].groupby("day")[column].sum()
     complete = hour >= store.hours[-1]
     last_full = day if complete else day - 1
-    days = list(range(1, last_full + 1))
+    days = list(range(store.first_day, last_full + 1))
     daily = [float(by_day.get(d, 0.0)) for d in days]
     weights = store.day_weights
     sold_today = 0.0 if complete else float(rows[(rows["day"] == day) & (rows["hour"] <= hour)][column].sum())
     share = 0.0 if complete else typical_share_of_day_sold(store, day, hour)
     after = sum(weights[d] for d in range(day + 1, store.days_in_month + 1))
     result = month_end_range(daily, [weights[d] for d in days], share,
-                             0.0 if complete else weights[day], after, sold_today)
+                             0.0 if complete else weights[day], after, sold_today,
+                             store.weight_before_first_day)
 
     targets = [store.active_targets.get(c) for c in categories]
     target = sum(t for t in targets if t) if all(targets) else None
@@ -176,6 +180,7 @@ def get_month_path(day=None, hour=None, store=None):
         done += weights[d]
         plan.append(round(target * done / total_weight))
     return {"sold": sold, "plan": plan, "target": target, "measure": store.measure,
+            "partial": store.first_day > 1,
             "yardstick": yardstick_of(store, judged),
             "range": get_month_end_range(day=day, hour=hour, store=store, categories=judged)}
 

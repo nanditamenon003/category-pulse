@@ -194,14 +194,23 @@ def _saved_line():
 
 
 def _your_store_note(s):
-    saved = _saved_line()
-    html_block(
-        '<div class="cp-panel"><div class="cp-panel-title">Your store</div>'
-        f'<p>Showing your data for {esc(s.month_name)} {s.month_start.year}, as at the close of day '
-        f'{s.today_day}. {esc(saved)} To replace or delete it, go to Your data.</p>'
-        + "".join(f'<p class="cp-small">Note: {esc(w)}</p>' for w in s.warnings)
-        + '</div>'
-    )
+    html_block(f'<div class="cp-small" style="margin:0 0 6px">Your data for {esc(s.month_name)} '
+               f'{s.month_start.year}, to the close of day {s.today_day}. {esc(_saved_line())}</div>')
+    if s.warnings:
+        count = len(s.warnings)
+        with st.expander(f"{count} thing{'s' if count != 1 else ''} to check in your data",
+                         icon=":material/warning:"):
+            html_block("<ul>" + "".join(f"<li>{esc(w)}</li>" for w in s.warnings) + "</ul>")
+
+
+def stale_data_note(s):
+    """On every page: how old the data is, once it's old enough to mislead."""
+    last = pd.Timestamp(s.date(s.today_day)).date()
+    days = (pd.Timestamp.now(tz="Asia/Kolkata").date() - last).days
+    if days >= 2:
+        html_block(f'<div class="cp-alert amber"><b>Your data stops at {last:%a %d %b %Y}, {days} days ago.</b> '
+                   f'"Today" means that day. Upload your latest sales in Your data to see where you stand '
+                   f'now.</div>')
 
 
 def _start_here():
@@ -210,13 +219,8 @@ def _start_here():
         return
     s = current_store()
     html_block(
-        '<div class="cp-panel"><div class="cp-panel-title">Start here</div>'
-        f'<p>Category Pulse watches every category against its monthly target. It\'s day '
-        f'{s.today_day} of {s.days_in_month}, and a few categories need attention.</p>'
-        '<p><b>New here?</b> Take the 2-minute tour, or explore on your own: tap '
-        '<b>Men Casual Trousers</b> below to see why it\'s behind, open <b>Ask Category Pulse</b> '
-        '(bottom right) to question the data, or use the time button (top right) to rewind the '
-        'day.</p></div>'
+        f'<div class="cp-small" style="margin:0 0 6px">This is a sample store on day {s.today_day} of '
+        f'{s.days_in_month}. Tap any category below to see why, or ask a question (bottom right).</div>'
     )
     with st.container(horizontal=True, gap="small", vertical_alignment="center"):
         if st.button("Take the tour", key="start_tour", icon=":material/tour:"):
@@ -309,7 +313,8 @@ def today_page():
         return
     hour = current_hour()
     s = current_store()
-    page_title("Today", f"The store at {time_label(hour)} on day {s.today_day} of the month.")
+    page_title("Today", (f"Month to date, up to day {s.today_day}." if s.summary_only else
+                         f"The store at {time_label(hour)} on day {s.today_day} of the month."))
     if s.is_demo:
         _start_here()
     else:
@@ -357,7 +362,8 @@ def today_page():
                + month_cards
                + kpi_card("Need action", f"{len(behind)} behind", f"{len(drifting)} to watch",
                           tone="red" if behind else "")
-               + (kpi_card("Today so far", a(today_sold), f"of about {a(today_expected)} by now")
+               + ("" if s.summary_only else  # month-to-date totals have no figure for a single day
+                  kpi_card("Today so far", a(today_sold), f"of about {a(today_expected)} by now")
                   if lines_judged else
                   kpi_card("Today so far", a(sum(t["units_sold_today"] for t in lines_today)), ""))
                + "</div>")
@@ -366,17 +372,6 @@ def today_page():
         with st.container(key="plan_link"):
             st.page_link(tour.PAGES["Plan"], label=f"Plan for {WEEKDAY_NAMES[s.weekday(s.today_day + 1)]} is "
                          f"ready: what to focus on, stock to request, busy hours", icon=":material/checklist:")
-
-    if judged and not pace[0]["month_finished"]:
-        path = month_path_at(hour)
-        html_block(heading("The month so far", f"{s.measure_label} sold vs {PATH_LABEL[path['yardstick']].lower()}"))
-        html_block('<div class="cp-legend">'
-                   f'<span><i style="background:{ACCENT}"></i>Sold so far</span>'
-                   f'<span><i style="background:repeating-linear-gradient(90deg,#8A8A84 0 5px,transparent 5px 9px)">'
-                   f'</i>{PATH_LABEL[path["yardstick"]]}</span>'
-                   f'<span><i style="background:{ACCENT_LINE};height:9px"></i>Likely finish (a projection)</span>'
-                   '</div>')
-        st.altair_chart(month_chart(path, s), width="stretch")
 
     html_block(heading("Needs action now", "tap a category for the full picture"))
     if not behind:
@@ -412,8 +407,21 @@ def today_page():
                          f"Open {p['category']}"):
                 category_dialog(p["category"])
 
-    html_block(heading("Today so far, by line", f"{s.measure_label} sold today / expected by now")
-               + grid(line_card(t) for t in lines_today))
+    # A chart by day needs real days: not a file for part of the month, or month-to-date totals.
+    path = month_path_at(hour) if judged and not pace[0]["month_finished"] else None
+    if path and not (path["partial"] or s.summary_only):
+        html_block(heading("The month so far", f"{s.measure_label} sold vs {PATH_LABEL[path['yardstick']].lower()}"))
+        html_block('<div class="cp-legend">'
+                   f'<span><i style="background:{ACCENT}"></i>Sold so far</span>'
+                   f'<span><i style="background:repeating-linear-gradient(90deg,#8A8A84 0 5px,transparent 5px 9px)">'
+                   f'</i>{PATH_LABEL[path["yardstick"]]}</span>'
+                   f'<span><i style="background:{ACCENT_LINE};height:9px"></i>Likely finish (a projection)</span>'
+                   '</div>')
+        st.altair_chart(month_chart(path, s), width="stretch")
+
+    if not s.summary_only:
+        html_block(heading("Today so far, by line", f"{s.measure_label} sold today / expected by now")
+                   + grid(line_card(t) for t in lines_today))
 
 
 # --- Category detail pop-up -------------------------------------------------------------------
@@ -1395,6 +1403,10 @@ def _fill_details(result):
     st.session_state["up_sale_days"] = ", ".join(str(d) for d in settings.get("sale_days", []))
     st.session_state["up_target_units"] = None
     st.session_state["up_target_value"] = None
+    st.session_state["up_uplift"] = settings.get("sale_uplift")
+    st.session_state.pop("up_covers", None)
+    st.session_state.pop("up_as_of", None)
+    st.session_state.pop("up_add_to_saved", None)
 
 
 NOT_SET = "No fixed day"
@@ -1415,10 +1427,18 @@ def _upload_extras():
             extras["sale_days"] = smart_import.sale_day_numbers(sale_days)
         except StoreDataError as e:
             problems += e.problems
-    for key, extra in (("up_target_units", "store_target_units"), ("up_target_value", "store_target_value")):
+    for key, extra in (("up_target_units", "store_target_units"), ("up_target_value", "store_target_value"),
+                       ("up_uplift", "sale_uplift"), ("up_covers", "one_date_means"), ("up_as_of", "as_of")):
         if st.session_state.get(key):
             extras[extra] = st.session_state[key]
     return extras, problems
+
+
+def _earlier_files(result):
+    """The saved month this upload adds to. Once it's been shown, it stays with what it was built from."""
+    if "built_on" in result:
+        return result["built_on"]
+    return st.session_state.get("saved_files") if st.session_state.get("up_add_to_saved", True) else None
 
 
 def _build_upload(result):
@@ -1426,7 +1446,9 @@ def _build_upload(result):
     if not result["tables"]:
         return
     extras, problems = _upload_extras()
-    signature = repr([(t["role"], sorted(t["mapping"].items())) for t in result["tables"]]) + repr(extras)
+    earlier = _earlier_files(result)
+    signature = (repr([(t["role"], sorted(t["mapping"].items())) for t in result["tables"]]) + repr(extras)
+                 + repr(sum(len(data) for _, data in earlier or [])))
     if result.get("signature") == signature:
         return
     result["signature"] = signature
@@ -1435,7 +1457,7 @@ def _build_upload(result):
         return
     try:
         with st.spinner("Working out your store..."):
-            store, more, keep = upload.build(result["tables"], extras)
+            store, more, keep = upload.build(result["tables"], extras, earlier)
         result.update(ok=True, store=store, build_notes=more, keep=keep, problems=[])
     except StoreDataError as e:
         result.update(ok=False, store=None, problems=e.problems)
@@ -1470,6 +1492,27 @@ def _table_editor(i, t, upload_key):
     t["mapping"] = {c: by_label.get(used) for c, used in zip(t["columns"], edited["Used as"])}
 
 
+COVERS = {"mtd": "The whole month so far (month-to-date totals)", "day": "Only that one day"}
+
+
+def _what_it_covers(result):
+    """The two things only the person can say: what the figures cover, and whether to add to the saved month."""
+    question = smart_import.summary_question(result["tables"], _earlier_files(result))
+    if question and question["can_be_day"]:
+        st.session_state.setdefault("up_covers", question["guess"])
+        st.radio(f"Your sales are all dated {question['as_of']:%d %b %Y}. What do the numbers cover?",
+                 list(COVERS), format_func=COVERS.get, key="up_covers")
+    elif question:
+        st.date_input("Your figures have no date. What date do they run up to?",
+                      value=question["as_of"].date() if question["as_of"] is not None else None,
+                      format="DD/MM/YYYY", key="up_as_of")
+    if st.session_state.get("saved_files") and "built_on" not in result:
+        st.checkbox("Add this file to the month I've already saved", value=True, key="up_add_to_saved",
+                    help="Days already saved are kept and this file's days are added, along with your "
+                         "targets and stock if this file doesn't have them. Turn this off to start again "
+                         "from this file alone. A file for a new month always starts afresh.")
+
+
 def _how_we_read_it(result, upload_key):
     """Step 2: what each table and column was read as, with dropdowns to put it right."""
     tables = result["tables"]
@@ -1484,6 +1527,7 @@ def _how_we_read_it(result, upload_key):
                    'saved. Your choices are remembered for next time.</div>')
         for i, t in enumerate(tables):
             _table_editor(i, t, upload_key)
+    _what_it_covers(result)
     has_targets = any(t["role"] == "targets" for t in tables)
     with st.expander("A few details (optional)", expanded=not has_targets):
         if not has_targets:
@@ -1501,9 +1545,13 @@ def _how_we_read_it(result, upload_key):
         cols[0].selectbox("Delivery day", [NOT_SET] + WEEKDAY_NAMES, key="up_delivery",
                           help="The weekday new stock usually arrives: used to spot missed deliveries "
                                "and sizes that will run out before the next one.")
-        cols[1].text_input("Sale days this month", key="up_sale_days", placeholder="e.g. 13, 27",
-                           help="Day numbers, separated by commas. Sale days are busier, so they're "
-                                "judged separately from ordinary days.")
+        cols[1].text_input("Sale or festival days this month", key="up_sale_days",
+                           placeholder="e.g. 13, 27 or 20-31",
+                           help="Day numbers, with commas or a range. The plan expects more on these "
+                                "days, so a busy stretch ahead doesn't make the month look behind.")
+        st.selectbox("How much busier are those days?", [None, 1.5, 2.0, 3.0], key="up_uplift",
+                     format_func=lambda x: "Work it out (from past sale days, or a usual uplift)" if x is None
+                     else f"About {x:g} times a normal day")
 
 
 def _judged_by(store):
@@ -1534,9 +1582,11 @@ def _upload_preview(store, notes):
                + kpi_card("Sold so far", f"{units:,} units", value_line)
                + "</div>")
 
-    if store.warnings:
+    to_check = list(store.warnings) + [n for n in notes if isinstance(n, smart_import.Important)]
+    notes = [n for n in notes if not isinstance(n, smart_import.Important)]
+    if to_check:
         html_block('<div class="cp-alert amber"><div class="cp-alert-title">Check these before you continue'
-                   '</div><ul>' + "".join(f"<li>{esc(w)}</li>" for w in store.warnings) + "</ul></div>")
+                   '</div><ul>' + "".join(f"<li>{esc(w)}</li>" for w in to_check) + "</ul></div>")
 
     html_block(heading("How each category is judged") + f'<div class="cp-panel">{_judged_by(store)}</div>')
     html_block(heading("What your data switches on")
@@ -1573,6 +1623,8 @@ def _upload_preview(store, notes):
         st.session_state["layouts"] = dict(list(layouts.items())[-20:])
         st.session_state["my_store"] = store
         st.session_state["tour_step"] = None
+        result["built_on"] = _earlier_files(result)
+        st.session_state["saved_files"] = result.get("keep", [])
         _save_to_account(store, result.get("keep", []), st.session_state["layouts"])
         st.switch_page(tour.PAGES["Today"])
 
@@ -1588,6 +1640,7 @@ def load_saved_store():
             if saved is None:
                 return
             result = _reading(saved["files"], saved["layouts"])
+            result["built_on"] = None
             _fill_details(result)
             _build_upload(result)
     except storage.StorageError as e:
@@ -1599,6 +1652,7 @@ def load_saved_store():
         return
     st.session_state["layouts"] = saved["layouts"]
     st.session_state["my_store"] = result["store"]
+    st.session_state["saved_files"] = saved["files"]
     st.session_state["upload_result"] = result
     st.session_state["saved_at"] = saved["saved_at"]
 

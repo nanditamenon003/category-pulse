@@ -16,6 +16,7 @@ raises MissingData with a plain explanation instead of guessing.
 
 import calendar
 import dataclasses
+import difflib
 import functools
 import hashlib
 import os
@@ -86,6 +87,9 @@ class Store:
     target_notes: dict = field(default_factory=dict)   # measure -> notes on where targets came from
     target_source: dict = field(default_factory=dict)  # measure -> {category: where its target came from}
     measure: str = "units"     # what pace is judged in: "units" or "value" (rupees)
+    first_day: int = 1         # the first day the sales cover (later than 1: a part of the month)
+    summary_only: bool = False  # sales came as month-to-date totals, so daily figures are estimates
+    uncounted: frozenset = frozenset()  # categories the stock report doesn't mention: stock unknown
 
     # --- Calendar ------------------------------------------------------------------
 
@@ -109,6 +113,15 @@ class Store:
 
     def day_weight(self, day):
         return self.day_weights[day]
+
+    @property
+    def weight_before_first_day(self):
+        """How much of the month's trading falls before the sales start (0 for a whole month)."""
+        return sum(self.day_weights[d] for d in range(1, self.first_day))
+
+    def stock_known(self, category):
+        """Whether there's a stock count for this category (a report may leave some out)."""
+        return self.has_stock and category not in self.uncounted
 
     def categories_in(self, line=None, department=None):
         return [c for c in self.categories
@@ -466,11 +479,45 @@ def _has(df, column):
     return column in df.columns and df[column].notna().any()
 
 
+_NUMERIC_DATE = re.compile(r"^(\d{1,2})[/\-.](\d{1,2})[/\-.]\d{2,4}")
+
+
+def month_comes_first(text):
+    """
+    Whether text dates like 06/13/2026 are written month first. A first number
+    over 12 means day first and a second number over 12 means month first. When
+    every date fits both ways, it's whichever reading puts the dates closest
+    together, since a file covers days of one month, not the 6th of every month.
+    Day first (as written in India) wins a tie.
+    """
+    parts = text.str.extract(_NUMERIC_DATE).dropna()
+    if parts.empty:
+        return False
+    first, second = parts[0].astype(int), parts[1].astype(int)
+    if (first > 12).any():
+        return False
+    if (second > 12).any():
+        return True
+    numeric = text.loc[parts.index]
+
+    def span(dayfirst):
+        read = pd.to_datetime(numeric, dayfirst=dayfirst, format="mixed", errors="coerce").dropna()
+        return (read.max() - read.min()) if len(read) else pd.Timedelta(0)
+
+    return span(False) < span(True)
+
+
+def read_date_text(text):
+    """Text that isn't year-first -> dates, with any times kept, whichever way round they're written."""
+    return pd.to_datetime(text, dayfirst=not month_comes_first(text), format="mixed", errors="coerce")
+
+
 def _parse_dates(values):
     """
     Dates as the store's files write them: real dates (from Excel), year-first
-    text (2026-05-24), or day-first text as written in India (24/05/2026).
-    Unreadable ones come back blank.
+    text (2026-05-24), or day-first text as written in India (24/05/2026), or
+    month-first if the file shows that's what it uses. Unreadable ones come
+    back blank.
     """
     if pd.api.types.is_datetime64_any_dtype(values):
         return values
@@ -478,7 +525,7 @@ def _parse_dates(values):
     year_first = text.str.match(r"^\d{4}-\d{1,2}-\d{1,2}")
     dates = pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
     dates[year_first] = pd.to_datetime(text[year_first].str[:10], format="%Y-%m-%d", errors="coerce")
-    dates[~year_first] = pd.to_datetime(text[~year_first], dayfirst=True, format="mixed", errors="coerce")
+    dates[~year_first] = read_date_text(text[~year_first])
     return dates
 
 
@@ -612,8 +659,37 @@ def _match_ids(full, product, lookup, product_lookup):
                       for f, p in zip(full, product)], index=full.index, dtype=object)
 
 
+def _close_spelling(name, known):
+    """
+    The one known name that's clearly the same as `name`, spelt a little
+    differently ('Polo' and 'Polos', 'T Shirts' and 'T-shirts'), or None.
+    Two different categories that look alike must not be merged, so a second
+    close candidate means no match.
+    """
+    def squeeze(text):
+        text = re.sub(r"[^a-z0-9]", "", _normal_name(text))
+        return text[:-1] if text.endswith("s") else text
+
+    wanted = squeeze(name)
+    same = [k for k in known if squeeze(k) == wanted]
+    if len(same) == 1:
+        return same[0]
+    if same:
+        return None
+    close = difflib.get_close_matches(wanted, [squeeze(k) for k in known], n=2, cutoff=0.86)
+    if len(close) != 1:
+        return None
+    match = next(k for k in known if squeeze(k) == close[0])
+    # A slip in the spelling keeps the same start and the same words: 'Men Tops' isn't
+    # 'Women Tops', and 'Men Shirts' isn't 'Men T Shirts', however alike they look.
+    if wanted[0] != close[0][0] or len(_normal_name(name).split()) != len(_normal_name(match).split()):
+        return None
+    return match
+
+
 def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name="Your store",
-                store_id=None, sale_days=(), delivery_weekday=None, target_level=None):
+                store_id=None, sale_days=(), delivery_weekday=None, target_level=None, sale_uplift=None,
+                summary_only=False):
     """
     Builds a Store from any store's tables (columns listed above). Raises
     StoreDataError listing every problem if the data can't be used; things it
@@ -624,7 +700,10 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
     loyalty figures and targets are all optional. Targets (None for none) can
     be per category, per floor, per line or for the whole store:
     `target_level` is "category", "department", "line" or "store", worked out
-    from the targets' columns if not given.
+    from the targets' columns if not given. `sale_uplift` is how many times
+    busier than a normal day the sale days are (learned from any that have
+    passed, if not given). `summary_only` says the sales were month-to-date
+    totals spread across the days, so daily figures are estimates.
 
     The month and "today" come from the sales dates: today is the latest day
     with sales, and the store is read as at the close of that day.
@@ -690,6 +769,26 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
                    else pd.Series("", index=targets.index))
         full = (t_line + " " + targets["product"]) if has_line and _has(targets, "line") else targets["product"]
         ids = _match_ids(full, targets["product"], lookup, product_lookup)
+        respelt = {}
+        for i in ids[ids.isna()].index:
+            found = _close_spelling(full[i], list(info))
+            if found:
+                ids[i] = found
+                respelt[full[i]] = found
+        if respelt:
+            check.warn("Target names read as your sales' spelling: "
+                       + ", ".join(f"{a!r} as {b!r}" for a, b in list(respelt.items())[:5]) + ".")
+        if ids.isna().all():
+            check.warn(f"None of the {len(ids)} names in your targets match your sales (for example "
+                       f"{_examples(full, 2)}, but sales have {_examples(list(info), 2)}), so the targets "
+                       f"were left out. Make the names match to use them.")
+            targets = None
+            target_level = None
+        elif ids.isna().any():
+            check.warn(f"{_examples(full[ids.isna()], 5)} {_plural(int(ids.isna().sum()), 'has', 'have')} a "
+                       f"target but no sales this month, so {_plural(int(ids.isna().sum()), 'it shows', 'they show')} "
+                       f"as far behind. If that's another spelling of a category, make the names match.")
+    if targets is not None and target_level == "category":
         for i, cid in ids.items():
             if cid is None:  # a target for a category with no sales yet
                 cid = full[i]
@@ -748,10 +847,16 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
 
     today_day = int(sales["day"].max())
     first_day = int(sales["day"].min())
-    if first_day > 1:
-        check.warn(f"Your sales start on day {first_day}, so days 1 to {first_day - 1} count as no "
-                   f"sales and every category will look further behind than it is. If the store "
-                   f"was open then, include sales from the 1st of the month.")
+    # A shop can be shut on the 1st or 2nd; much later than that, the file covers part of the month.
+    if summary_only:
+        check.warn(f"Read as month-to-date totals up to day {today_day}. Month figures and pace are real, "
+                   f"but there are no figures for a single day.")
+    if first_day <= 3 or summary_only:
+        first_day = 1
+    else:
+        check.warn(f"Your sales start on day {first_day}, so categories are judged only on days "
+                   f"{first_day} to {today_day}, and month totals leave out the earlier days. If the "
+                   f"store was open then, upload sales from the 1st of the month.")
     hours = (list(range(int(sales["hour"].min()), int(sales["hour"].max()) + 1)) if hourly
              else list(config.STORE_HOURS))
 
@@ -773,7 +878,20 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
         product = _text(df["product"])
         full = (_text(df["line"]) + " " + product) if has_line and _has(df, "line") else product
         ids = _match_ids(full, product, lookup, product_lookup)
-        if ids.isna().any():
+        respelt = {}
+        for name in full[ids.isna()].unique():
+            found = _close_spelling(name, categories)
+            if found:
+                ids[full == name] = found
+                respelt[name] = found
+        if respelt:
+            check.warn(f"{table.capitalize()} names read as your sales' spelling: "
+                       + ", ".join(f"{a!r} as {b!r}" for a, b in list(respelt.items())[:5]) + ".")
+        if ids.isna().all():
+            check.warn(f"None of the names in your {table} report match your sales (for example "
+                       f"{_examples(full, 2)}, but sales have {_examples(categories, 2)}), so it was left "
+                       f"out and nothing is marked as sold out. Make the names match to use it.")
+        elif ids.isna().any():
             check.warn(f"The {table} table has categories with no sales or target, so they were left "
                        f"out: {_examples(full[ids.isna()], 5)}.")
         return ids
@@ -812,8 +930,15 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
             check.problem("Sales and stock must both have sizes, or both leave them out.")
         stock = stock[stock["category"].notna()]
         stock = stock.groupby(keys, as_index=False)["units_remaining"].sum()
+        if stock.empty:
+            stock = None
     elif stock is not None:
         stock = None
+    # A category the report doesn't mention isn't sold out: its stock just isn't known.
+    uncounted = frozenset(categories) - set(stock["category"]) if stock is not None else frozenset()
+    if uncounted:
+        check.warn(f"The stock report doesn't mention {_examples(sorted(uncounted), 5)}, so "
+                   f"{_plural(len(uncounted), 'its', 'their')} stock isn't judged.")
 
     # --- Visitor counts (optional) -----------------------------------------------------------------
     if footfall is not None and _require_columns(footfall, "footfall", ["date", "visitors"], check):
@@ -879,7 +1004,7 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
             core_sizes[category] = [s for s in sizes[category] if s in core]
 
     # --- Targets in units and rupees, from whatever was given ---------------------------------------
-    weights = _learn_day_weights(sales, month_start, days_in_month, today_day, set(sale_days))
+    weights = _learn_day_weights(sales, month_start, days_in_month, today_day, set(sale_days), sale_uplift)
     group_of = category_line if target_level == "line" else category_department
 
     def numbers_of(column):
@@ -983,6 +1108,22 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
                                   f"sales to compare with, so {_plural(k, 'it', 'they')} can't be "
                                   f"judged in {'units' if measure == 'units' else 'rupees'} yet.")
 
+    # A target far from what the store sells is usually a slip: rupees typed as units, a missing zero.
+    done = sum(weights[d] for d in range(first_day, today_day + 1)) / sum(weights.values())
+    for measure, column, unit in (("units", "units_sold", "units"), ("value", "value", "rupees")):
+        stated = [c for c in categories if source.get(measure, {}).get(c) in GIVEN_SOURCES]
+        target = sum(resolved[measure][c] or 0 for c in stated)
+        sold = float(sales.loc[sales["category"].isin(stated), column].sum())
+        if not (stated and target > 0 and sold > 0 and done > 0):
+            continue
+        ratio = target / (sold / done)
+        if ratio >= 5 or ratio <= 0.2:
+            hint = " If that's a rupee figure, put it under the ₹ target instead." if unit == "units" else ""
+            check.warn(f"Please check your {unit} target: {target:,.0f} is about "
+                       f"{ratio if ratio >= 1 else 1 / ratio:.0f} times {'more' if ratio >= 1 else 'less'} than "
+                       f"the store is on course to sell this month ({sold / done:,.0f}), so every category "
+                       f"will look {'far behind' if ratio >= 1 else 'far ahead'}.{hint}")
+
     # Add each row's line and floor, as the Sample Store's data has them.
     for df in (sales, stock):
         if df is not None:
@@ -1025,22 +1166,43 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
         footfall=footfall,
         loyalty=loyalty,
         warnings=check.warnings,
+        first_day=first_day,
+        summary_only=summary_only,
+        uncounted=uncounted,
     )
 
 
-def _learn_day_weights(sales, month_start, days_in_month, today_day, sale_days):
+def plan_weights(by_weekday, month_start, days_in_month, sale_days=(), uplift=None):
+    """Each day's share of the month's trading: its weekday's weight, raised on sale days."""
+    uplift = uplift or config.SALE_DAY_MULTIPLIER
+    weights = {}
+    for d in range(1, days_in_month + 1):
+        weight = float(by_weekday[(month_start + timedelta(days=d - 1)).weekday()])
+        weights[d] = weight * uplift if d in sale_days else weight
+    return weights
+
+
+def _learn_day_weights(sales, month_start, days_in_month, today_day, sale_days, uplift=None):
     """
     How busy each day of the month is relative to the others, used to phase a
     monthly target into a target for today. Learned from this month's own
     sales by weekday once there are two full weeks to learn from; before that,
-    the usual weekday-vs-weekend pattern in config.py.
+    the usual weekday-vs-weekend pattern in config.py. Sale days are raised by
+    `uplift`; if it isn't given, it's learned from sale days that have passed
+    (against ordinary days of the same weekday), or else the usual figure.
     """
     weekday = {d: (month_start + timedelta(days=d - 1)).weekday() for d in range(1, days_in_month + 1)}
-    daily = sales[sales["day"] < today_day].groupby("day")["units_sold"].sum()
-    daily = daily[[d not in sale_days for d in daily.index]]
+    all_days = sales[sales["day"] < today_day].groupby("day")["units_sold"].sum()
+    daily = all_days[[d not in sale_days for d in all_days.index]]
     by_weekday = daily.groupby([weekday[d] for d in daily.index]).mean()
     if len(daily) >= 14 and len(by_weekday) == 7 and daily.mean() > 0:
         weights = (by_weekday / daily.mean()).to_dict()
     else:
         weights = config.WEEKDAY_WEIGHTS
-    return {d: float(weights[weekday[d]]) for d in range(1, days_in_month + 1)}
+        by_weekday = None
+    if uplift is None and sale_days and by_weekday is not None:
+        ratios = [all_days[d] / by_weekday[weekday[d]] for d in sale_days
+                  if d in all_days.index and weekday[d] in by_weekday and by_weekday[weekday[d]] > 0]
+        if ratios:
+            uplift = max(1.0, sum(ratios) / len(ratios))
+    return plan_weights(weights, month_start, days_in_month, sale_days, uplift)

@@ -120,12 +120,15 @@ def get_category_pace(day=None, hour=None, category=None, line=None, store=None)
     _validate_moment(store, day, hour)
 
     share_of_today = typical_share_of_day_sold(store, day, hour)
-    days_elapsed = (day - 1) + share_of_today
-    days_remaining = store.days_in_month - days_elapsed
+    days_elapsed = (day - store.first_day) + share_of_today
+    days_remaining = store.days_in_month - (day - 1) - share_of_today
     month_finished = days_remaining < 1e-9
     weights = store.day_weights
-    plan_done = ((sum(weights[d] for d in range(1, day)) + weights[day] * share_of_today)
+    # A file for part of the month is judged on the days it covers. For what's still
+    # needed, the days before it are assumed to have gone to plan: nothing says otherwise.
+    plan_done = ((sum(weights[d] for d in range(store.first_day, day)) + weights[day] * share_of_today)
                  / sum(weights.values()))
+    share_before_file = store.weight_before_first_day / sum(weights.values())
     sold_by_category = _as_of(store.sales, day, hour).groupby("category")[store.sold_column].sum()
 
     selected = [
@@ -145,7 +148,7 @@ def get_category_pace(day=None, hour=None, category=None, line=None, store=None)
         actual_per_day = sold / days_elapsed
         needs_per_day, unlikely = None, False
         if target:
-            still_needed = max(0, target - sold)
+            still_needed = max(0, target - sold - target * share_before_file)
             needs_per_day = 0.0 if month_finished else still_needed / days_remaining
             unlikely = (not month_finished and still_needed > 0
                         and needs_per_day > REQUIRED_RATE_STRETCH * actual_per_day)

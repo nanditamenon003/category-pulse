@@ -20,12 +20,29 @@ is dropped before the data is saved.
 import csv
 import hashlib
 import io
+import math
 import re
 from datetime import date, datetime
 
+import numpy as np
 import pandas as pd
 
-from store import WEEKDAY_NAMES, StoreDataError, _normal_name, _parse_dates
+import config
+from store import (
+    WEEKDAY_NAMES,
+    StoreDataError,
+    _clean_number_text,
+    _normal_name,
+    _parse_dates,
+    month_comes_first,
+    plan_weights,
+    read_date_text,
+)
+
+
+class Important(str):
+    """A note that changes what the numbers mean: shown as a warning, not in small print."""
+
 
 # --- What each kind of table holds --------------------------------------------------------------
 
@@ -34,7 +51,8 @@ ROLES = {"sales": "Sales", "stock": "Stock on hand", "targets": "Targets", "visi
 
 # role -> [(field, label, required)], in the order the upload page lists them.
 FIELDS = {
-    "sales": [("date", "Date", True), ("product", "Category", True), ("units", "Units sold", True),
+    # A sales file may have no date column if it's month-to-date totals: see summary_question.
+    "sales": [("date", "Date", False), ("product", "Category", True), ("units", "Units sold", True),
               ("value", "Value (₹)", False), ("line", "Line or brand", False),
               ("department", "Floor", False), ("size", "Size", False), ("hour", "Hour or time", False),
               ("bill", "Bill number", False), ("transactions", "Number of bills", False)],
@@ -44,7 +62,8 @@ FIELDS = {
     "targets": [("product", "Category", False), ("department", "Floor", False),
                 ("line", "Line or brand", False), ("target", "Target (units)", False),
                 ("target_value", "Target (₹)", False), ("last_year", "Last year (units)", False),
-                ("last_year_value", "Last year (₹)", False), ("sizes", "Sizes", False),
+                ("last_year_value", "Last year (₹)", False), ("sold_so_far", "Sold so far (units)", False),
+                ("sold_value", "Sold so far (₹)", False), ("month", "Month", False), ("sizes", "Sizes", False),
                 ("core_sizes", "Core sizes", False)],
     "visitors": [("date", "Date", True), ("visitors", "Visitors", True), ("hour", "Hour or time", False),
                  ("department", "Floor", False)],
@@ -90,6 +109,7 @@ _WORDS = {
     "visitors": (["visitors", "footfall", "walk-ins", "walk ins", "walkins", "footfalls", "traffic",
                   "people in", "entries", "visitor count"],
                  [("footfall",), ("visitor",), ("walk",)], []),
+    "month": (["month", "period", "month name"], [], []),
     "sizes": (["sizes"], [], []),
     "core_sizes": (["core sizes", "core size"], [("core",)], []),
     "tier": (["tier", "loyalty tier", "member tier"], [("tier",)], []),
@@ -124,6 +144,7 @@ _NAME_ROLES = [("read me", "skip"), ("readme", "skip"), ("instruction", "skip"),
                ("sale", "sales"), ("bill", "sales"), ("invoice", "sales"), ("transaction", "sales")]
 
 _TOTAL_ROW = re.compile(r"^(grand |sub ?)?total\b")
+_MONTH_TO_DATE = re.compile(r"\b(mtd|m\.t\.d|month[ -]to[ -]date|till[ -]date|to[ -]date|cumulative)\b", re.I)
 
 
 def plain(text):
@@ -171,6 +192,18 @@ def _target_field(column):
     return None
 
 
+def _sold_field(column):
+    """A sold-so-far column in a targets sheet ('Sold', 'MTD Qty', 'Achieved'): units or rupees."""
+    raw = str(column).lower()
+    tokens = set(re.findall(r"[a-z]+", raw))
+    if tokens & {"target", "budget", "plan", "goal", "balance", "last", "ly", "stock"} or "%" in raw:
+        return None
+    if tokens & {"sold", "mtd", "achieved", "achievement", "ach", "actual"}:
+        money = "₹" in raw or bool(tokens & (MONEY - {"sales"}))
+        return "sold_value" if money else "sold_so_far"
+    return None
+
+
 def guess_columns(role, columns, df=None):
     """{column: field or None} for a table in `role`: each field goes to its best-fitting column."""
     mapping = {c: None for c in columns}
@@ -179,7 +212,7 @@ def guess_columns(role, columns, df=None):
     headings = {c: plain(c) for c in columns}
     if role == "targets":
         for c in columns:
-            field = _target_field(c)
+            field = _target_field(c) or _sold_field(c)
             if field and field not in mapping.values():
                 mapping[c] = field
     for field, _, _ in FIELDS[role]:
@@ -230,7 +263,7 @@ def _role_from_columns(columns, df):
     if any(w in h for h in headings for w in stock_words) and "value" not in guesses["sales"] \
             and "bill" not in guesses["sales"]:
         return "stock" if {"product", "units"} <= guesses["stock"] else "skip"
-    if {"date", "units"} <= guesses["sales"] or {"product", "units", "bill"} <= guesses["sales"]:
+    if {"date", "units"} <= guesses["sales"] or {"product", "units"} <= guesses["sales"]:
         return "sales"
     return "skip"
 
@@ -252,20 +285,26 @@ def _looks_like_heading(cell):
         return False
     heading = plain(cell)
     return bool(heading) and (heading in _KNOWN or _target_field(cell) is not None
-                              or heading in ("setting", "tier"))
+                              or _sold_field(cell) is not None or heading in ("setting", "tier"))
 
 
-def _find_header(rows):
-    """The first of the top 20 rows with at least two known headings, or None."""
-    for i, row in enumerate(rows[:20]):
-        if sum(_looks_like_heading(c) for c in row) >= 2:
-            return i
+def _find_header(rows, role_known=False):
+    """
+    The first of the top 20 rows with at least two known headings, or None. When the
+    file's name already says what it holds ("targets.csv"), one known heading is
+    enough, so a small file like Store | Target isn't lost.
+    """
+    for wanted in (2, 1) if role_known else (2,):
+        for i, row in enumerate(rows[:20]):
+            if sum(_looks_like_heading(c) for c in row) >= wanted:
+                return i
     return None
 
 
 def _read_csv(name, data):
     """A CSV file as a table of cells, whatever its encoding."""
-    for encoding in ("utf-8-sig", "cp1252"):
+    encodings = ("utf-16",) if data[:2] in (b"\xff\xfe", b"\xfe\xff") else ("utf-8-sig", "cp1252")
+    for encoding in encodings:
         try:
             text = data.decode(encoding)
             break
@@ -273,7 +312,11 @@ def _read_csv(name, data):
             continue
     else:
         raise StoreDataError(f"{name} couldn't be read as text.")
-    rows = [row for row in csv.reader(io.StringIO(text)) if any(cell.strip() for cell in row)]
+    try:
+        rows = [row for row in csv.reader(io.StringIO(text, newline="")) if any(cell.strip() for cell in row)]
+    except csv.Error:
+        raise StoreDataError(f"{name} couldn't be read as a CSV file. Open it in Excel and save it as "
+                             f"Excel (.xlsx) or CSV, then upload that.")
     width = max((len(r) for r in rows), default=0)
     return pd.DataFrame([r + [None] * (width - len(r)) for r in rows]).replace({"": None})
 
@@ -334,15 +377,17 @@ def find_tables(files, remembered=None):
         if raw.empty or name_role == "skip":
             continue
         rows = raw.values.tolist()
-        at = _find_header(rows)
+        at = _find_header(rows, role_known=name_role is not None)
+        title = ""
         if at is None and name_role == "settings" and raw.shape[1] >= 2:
             df = pd.DataFrame([r[:2] for r in rows], columns=["Setting", "Value"])
         elif at is None:
-            notes.append(f"{label}: no column headings found, so it was left out.")
+            notes.append(Important(f"{label} was left out: its column headings couldn't be found."))
             continue
         else:
             if at > 0:
                 notes.append(f"{label}: skipped {at} row{'s' if at > 1 else ''} above the headings.")
+                title = " ".join(str(c) for row in rows[:at] for c in row if c is not None and str(c) != "nan")
             df = pd.DataFrame(rows[at + 1:], columns=_unique(rows[at])).dropna(how="all")
         df = df.loc[:, [not (c.startswith("Column ") and df[c].isna().all()) for c in df.columns]]
         if df.empty:
@@ -356,14 +401,103 @@ def find_tables(files, remembered=None):
             mapping = guess_columns(role, columns, df)
         examples = {c: [_example(v) for v in df[c].dropna().drop_duplicates().head(3)] for c in columns}
         tables.append({"key": label, "label": label, "role": role, "columns": columns,
-                       "mapping": mapping, "examples": examples, "df": df, "rows": len(df)})
+                       "mapping": mapping, "examples": examples, "df": df, "rows": len(df),
+                       "title": title, "file": file})
     return tables, notes
 
 
-def check_choices(tables):
+SAVED_COPY = "Saved by Category Pulse"
+
+
+def _date_in_title(text):
+    """The latest date written in a report's title lines ('01-06-2026 to 20-06-2026'), or None."""
+    found = re.findall(r"\d{1,2}[/\-.]\d{1,2}[/\-.]\d{2,4}|\d{4}-\d{1,2}-\d{1,2}|\d{1,2}[ -][A-Za-z]{3,9}[ -]\d{2,4}",
+                       text or "")
+    if not found:
+        return None
+    dates = _parse_dates(pd.Series(found)).dropna()
+    return dates.max() if len(dates) else None
+
+
+def _numeric(values):
+    return pd.to_numeric(_clean_number_text(values), errors="coerce")
+
+
+def _sold_in_targets(tables):
+    """Targets tables that also hold what's sold so far (the classic target-vs-achieved sheet)."""
+    return [t for t in tables if t["role"] == "targets" and "sold_so_far" in t["mapping"].values()]
+
+
+def summary_question(tables, earlier=None):
+    """
+    Whether the sales might be month-to-date totals rather than sales by day. A file
+    with no dates, or with only one date, could be either, and only the person knows.
+    Returns None when the sales are clearly by day, or a dict: "as_of" (the date the
+    figures run up to, or None), "guess" ("mtd" or "day") and "can_be_day" (False when
+    there's no date, so it can only be totals).
+    """
+    sales = [t for t in tables if t["role"] == "sales"]
+    if any(t["role"] == "settings" and SAVED_COPY in t["df"].iloc[:, 0].astype(str).values for t in tables):
+        return None  # our own saved copy: already by day, so nothing to ask
+    if not sales:
+        return ({"as_of": next((d for t in tables if (d := _date_in_title(t["title"])) is not None), None),
+                 "guess": "mtd", "can_be_day": False} if _sold_in_targets(tables) else None)
+    dates, undated = set(), False
+    for t in sales:
+        fields = {f: c for c, f in t["mapping"].items() if f}
+        if "date" not in fields:
+            undated = True
+            continue
+        if "bill" in fields or "hour" in fields:
+            return None  # bill lines or hours: this is real day-by-day trading
+        dates |= set(_parse_dates(t["df"][fields["date"]]).dropna().dt.normalize())
+    if undated:
+        as_of = next((d for t in sales if (d := _date_in_title(t["title"])) is not None), None)
+        return {"as_of": as_of, "guess": "mtd", "can_be_day": False}
+    if len(dates) != 1:
+        return None
+    as_of = next(iter(dates))
+
+    def units_of(t):
+        column = next((c for c, f in t["mapping"].items() if f == "units"), None)
+        return float(_numeric(t["df"][column]).fillna(0).sum()) if column else 0.0
+
+    sold = sum(units_of(t) for t in sales)
+    says_mtd = any(_MONTH_TO_DATE.search(" ".join([t["title"], t["file"], t["label"]] + [str(c) for c in t["columns"]]))
+                   for t in sales)
+    guess = None
+    if says_mtd:
+        guess = "mtd"
+    if guess is None and earlier:
+        saved = _read_saved(earlier).get("sales")
+        if saved is not None and "date" in saved.columns:
+            when = _parse_dates(saved["date"])
+            same_month = (when.dt.year == as_of.year) & (when.dt.month == as_of.month) & (when < as_of)
+            before = float(_numeric(saved.loc[same_month, "units"]).fillna(0).sum())
+            if before > 0:
+                guess = "mtd" if sold >= 0.7 * before else "day"
+    if guess is None and sold > 0:
+        for t in tables:
+            column = next((c for c, f in t["mapping"].items() if f == "target"), None) if t["role"] == "targets" else None
+            target = float(_numeric(t["df"][column]).fillna(0).sum()) if column else 0.0
+            if target > 0:
+                month_days = as_of.days_in_month
+                as_totals = abs(math.log(sold / (target * as_of.day / month_days)))
+                as_a_day = abs(math.log(sold / (target / month_days)))
+                guess = "mtd" if as_totals < as_a_day else "day"
+                break
+    if guess is None:
+        guess = "mtd" if as_of.day > 3 else "day"
+    return {"as_of": as_of, "guess": guess, "can_be_day": True}
+
+
+def check_choices(tables, extras=None):
     """Problems with what each table and column is set to, in plain words ([] if none)."""
     problems = []
-    if not any(t["role"] == "sales" for t in tables):
+    question = summary_question(tables)
+    if question and not question["can_be_day"] and question["as_of"] is None and not (extras or {}).get("as_of"):
+        problems.append("Your figures have no date. Choose the date they run up to.")
+    if not any(t["role"] == "sales" for t in tables) and not _sold_in_targets(tables):
         problems.append("No sales found. Upload your sales (at least a date, a category and units "
                         "sold for each row), or choose which of your tables holds them.")
     for t in tables:
@@ -394,8 +528,115 @@ def _datetimes(values):
     year_first = text.str.match(r"^\d{4}-\d{1,2}-\d{1,2}")
     out = pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
     out[year_first] = pd.to_datetime(text[year_first], format="mixed", errors="coerce")
-    out[~year_first] = pd.to_datetime(text[~year_first], dayfirst=True, format="mixed", errors="coerce")
+    out[~year_first] = read_date_text(text[~year_first])
     return out
+
+
+def _spread_totals(sales, as_of, sale_days, uplift):
+    """
+    Month-to-date totals -> a row for each day up to `as_of`, shared by how busy each
+    day usually is, in whole units that add back up exactly. So pace, the month-end
+    range and stock rates work, but no single day's figure is real, and the store is
+    marked summary_only so the pages don't present them as if they were.
+    """
+    month_start = date(as_of.year, as_of.month, 1)
+    weights = plan_weights(config.WEEKDAY_WEIGHTS, month_start, as_of.days_in_month, sale_days, uplift)
+    shares = np.array([weights[d] for d in range(1, as_of.day + 1)])
+    running = np.cumsum(shares) / shares.sum()
+    units = _numeric(sales["units"])
+    if units.isna().any():
+        raise StoreDataError(f"Some figures for units sold aren't numbers (for example "
+                             f"{sales.loc[units.isna(), 'units'].iloc[0]!r}).")
+    value = _numeric(sales["value"]).fillna(0) if "value" in sales.columns else None
+    keep = [c for c in sales.columns if c in ("product", "line", "department", "size")]
+    rows = []
+    for i, total in units.items():
+        daily = np.diff(np.round(total * running), prepend=0)
+        for d, count in zip(range(1, as_of.day + 1), daily):
+            if count == 0 and d != as_of.day:
+                continue  # a category with no sales still keeps one row, so it stays on the list
+            row = {c: sales.at[i, c] for c in keep}
+            row["date"] = f"{as_of.year:04d}-{as_of.month:02d}-{d:02d}"
+            row["units"] = int(count)
+            if value is not None:
+                row["value"] = round(float(value[i]) * (count / total if total else (d == as_of.day)), 2)
+            rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _read_saved(files):
+    """Saved tables (see to_files) as {role: DataFrame}, plus their "settings"."""
+    out = {}
+    for name, data in files or []:
+        role = re.sub(r"\.csv$", "", name, flags=re.I)
+        if role in ("sales", "targets", "stock", "visitors", "loyalty", "settings"):
+            out[role] = pd.read_csv(io.BytesIO(data), dtype=str)
+    return out
+
+
+def _shared_columns(new, old):
+    """Optional columns only stay if both tables have them: half a month with sizes can't be judged by size."""
+    optional = ("hour", "size", "line", "department", "value", "bill", "transactions")
+    dropped = [c for c in optional if (c in new.columns) != (c in old.columns)]
+    return new.drop(columns=dropped, errors="ignore"), old.drop(columns=dropped, errors="ignore")
+
+
+def _add_earlier_days(new, old):
+    """`new`, plus the rows of `old` on days `new` doesn't cover. Returns (table, how many days were kept)."""
+    new, old = _shared_columns(new, old)
+    covered = set(_parse_dates(new["date"]).dropna().dt.normalize())
+    when = _parse_dates(old["date"]).dt.normalize()
+    keep = old[when.notna() & ~when.isin(covered)]
+    return pd.concat([keep, new], ignore_index=True), int(when[keep.index].nunique())
+
+
+def _merge_with_saved(out, settings, earlier, summary, latest, notes):
+    """
+    A file that adds to the person's saved month: a day's report joins the days already
+    saved, and anything the new file doesn't include (targets, stock...) carries over.
+    A later month starts afresh; an older month is flagged, since it replaces newer data.
+    """
+    saved = _read_saved(earlier)
+    old_settings = _settings(saved["settings"].where(saved["settings"].notna(), None)) if "settings" in saved else {}
+    for key in ("name", "delivery_weekday"):
+        if key in old_settings:
+            settings.setdefault(key, old_settings[key])
+    if "sales" not in saved:
+        return
+    last_saved = _parse_dates(saved["sales"]["date"]).max()
+    if pd.isna(last_saved):
+        return
+    if (last_saved.year, last_saved.month) > (latest.year, latest.month):
+        notes.append(Important(f"This file is for {latest:%B %Y}, older than your saved {last_saved:%B %Y}. "
+                               f"Showing it replaces the saved month."))
+        return
+    if (last_saved.year, last_saved.month) < (latest.year, latest.month):
+        return
+    for key in ("sale_days", "sale_uplift"):
+        if key in old_settings:
+            settings.setdefault(key, old_settings[key])
+    if not summary:
+        out["sales"], kept = _add_earlier_days(out["sales"], saved["sales"])
+        if kept:
+            notes.append(Important(f"Added to your saved {latest:%B}: {kept} earlier "
+                                   f"day{'s' if kept != 1 else ''} kept, and this file's days taken from the "
+                                   f"new file."))
+            if old_settings.get("summary_only"):
+                settings["summary_only"] = True  # the earlier days are still estimates
+    for role in ("targets", "loyalty"):
+        if out.get(role) is None and role in saved:
+            out[role] = saved[role]
+    for role in ("stock", "visitors"):
+        new, old = out.get(role), saved.get(role)
+        if old is None or "date" not in old.columns:
+            out[role] = new if new is not None else old
+        elif new is None:
+            out[role] = old
+        else:
+            new = new.copy()
+            if "date" not in new.columns:
+                new["date"] = _parse_dates(out["sales"]["date"]).max()
+            out[role] = _add_earlier_days(new, old)[0]
 
 
 def _settings(df):
@@ -413,6 +654,11 @@ def _settings(df):
     raw = values.get("sale days")
     if raw is not None and (isinstance(raw, (datetime, date)) or (pd.notna(raw) and str(raw).strip())):
         out["sale_days"] = sale_day_numbers(raw)
+    uplift = values.get("sale day uplift")
+    if uplift is not None and pd.notna(uplift) and str(uplift).strip():
+        out["sale_uplift"] = float(uplift)
+    if str(values.get("month-to-date file", "")).strip().lower() == "yes":
+        out["summary_only"] = True
     return out
 
 
@@ -426,13 +672,17 @@ def weekday_number(text):
 
 
 def sale_day_numbers(raw):
-    """'13, 27' or dates -> [13, 27]. Raises StoreDataError for anything else."""
+    """'13, 27', a range like '21-31', or dates -> day numbers. Raises StoreDataError for anything else."""
     if isinstance(raw, (datetime, date)):
         return [raw.day]
     days = []
     for part in (p.strip() for p in re.split(r"[,;]", str(raw)) if p.strip()):
         if re.fullmatch(r"\d{1,2}(\.0)?", part):  # a day number, e.g. 13
             days.append(int(float(part)))
+            continue
+        span = re.fullmatch(r"(\d{1,2})\s*(?:-|to)\s*(\d{1,2})", part)
+        if span:  # a stretch of days, e.g. a festival: 21-31
+            days.extend(range(int(span.group(1)), int(span.group(2)) + 1))
             continue
         when = pd.to_datetime(part, errors="coerce", dayfirst=True)  # a date, e.g. 13/05/2026
         if pd.isna(when):
@@ -462,12 +712,30 @@ def _in_month(df, label, month, notes):
     return df[~other]
 
 
-def canonical_tables(tables, extras=None):
+def _for_this_month(targets, latest, notes):
+    """A targets table with a Month column: only the row or rows for the month being judged."""
+    def is_this_month(value):
+        text = str(value).strip()
+        when = pd.to_datetime(text, errors="coerce", dayfirst=True, format="mixed")
+        if pd.notna(when) and re.search(r"\d", text):
+            return (when.year, when.month) == (latest.year, latest.month)
+        return text[:3].lower() == latest.strftime("%b").lower()
+
+    matched = targets["month"].map(is_this_month)
+    if not matched.any():
+        notes.append(Important(f"Your targets have no row for {latest:%B %Y}, so they were left out."))
+        return None
+    return targets[matched].drop(columns="month")
+
+
+def canonical_tables(tables, extras=None, earlier=None):
     """
     The chosen tables as build_store() takes them: {"sales", "targets", "stock", "visitors",
     "loyalty"} (missing ones None), the store's settings, and notes on what was done.
     `extras` are details typed on the upload page: name, delivery_weekday, sale_days,
-    store_target_units, store_target_value (these override the file's Settings).
+    sale_uplift, store_target_units, store_target_value (these override the file's Settings),
+    one_date_means ("mtd" or "day") and as_of. `earlier` is the person's saved month, which
+    a file for part of that month adds to.
     """
     extras = extras or {}
     notes, by_role, settings = [], {}, {}
@@ -485,17 +753,58 @@ def canonical_tables(tables, extras=None):
     out = {role: (pd.concat([df for _, df in parts], ignore_index=True) if parts else None)
            for role, parts in by_role.items()}
 
+    for key in ("name", "delivery_weekday", "sale_days", "sale_uplift"):
+        if extras.get(key) not in (None, "", []):
+            settings[key] = extras[key]
+
+    # Targets that also hold what's sold so far: the classic target-vs-achieved sheet.
+    if out.get("targets") is not None and "sold_so_far" in out["targets"].columns:
+        sheet = out["targets"]
+        if out.get("sales") is None:
+            if "product" not in sheet.columns:
+                raise StoreDataError("Your targets sheet has sold figures but no category column. Choose "
+                                     "which column holds the category.")
+            names = {"sold_so_far": "units", "sold_value": "value"}
+            out["sales"] = sheet[[c for c in ("product", "line", "department", "sold_so_far", "sold_value")
+                                  if c in sheet.columns]].rename(columns=names)
+        out["targets"] = sheet.drop(columns=["sold_so_far", "sold_value"], errors="ignore")
+    if out.get("targets") is not None and "sold_value" in out["targets"].columns:
+        out["targets"] = out["targets"].drop(columns="sold_value")
+
+    # Month-to-date totals: share them across the days, and say the daily figures are estimates.
+    summary = False
+    question = summary_question(tables, earlier)
+    if question and (not question["can_be_day"] or extras.get("one_date_means", question["guess"]) == "mtd"):
+        as_of = extras.get("as_of") or question["as_of"]
+        if as_of is None:
+            raise StoreDataError("Your figures have no date. Choose the date they run up to.")
+        as_of = pd.Timestamp(as_of)
+        out["sales"] = _spread_totals(out["sales"], as_of, settings.get("sale_days", ()), settings.get("sale_uplift"))
+        settings["summary_only"] = True
+        summary = True
+
     sales = out["sales"]
     # The month: the latest one in the sales. The same month a year earlier is a yardstick.
     dates = _datetimes(sales["date"])
+    text_dates = sales["date"].astype(str).str.strip()
+    if not pd.api.types.is_datetime64_any_dtype(sales["date"]) and month_comes_first(text_dates):
+        notes.append(Important("Your dates look month first (06/13/2026), so they were read that way. If "
+                               "that's wrong, check the dates in your file."))
     latest = dates.max()
     if pd.isna(latest):
         raise StoreDataError(f"None of the sales dates can be read (for example "
                              f"{', '.join(map(str, sales['date'].dropna().head(2)))}).")
+    if latest.normalize() > pd.Timestamp(date.today()) + pd.Timedelta(days=1):
+        notes.append(Important(f"The latest sales date is {latest:%d %b %Y}, which is in the future. Please "
+                               f"check the dates in your file."))
     same = (dates.dt.year == latest.year) & (dates.dt.month == latest.month)
     year_ago = (dates.dt.year == latest.year - 1) & (dates.dt.month == latest.month)
     last_year = sales[year_ago].copy()
     other = dates.notna() & ~same & ~year_ago
+    if same.sum() < 0.2 * other.sum():
+        notes.append(Important(f"Only {int(same.sum())} of your {int(dates.notna().sum())} sales rows are from "
+                               f"{latest:%B %Y}, the latest month in the file, and only those are used. If that "
+                               f"looks wrong, check the dates."))
     if other.any() or year_ago.any():
         notes.append(f"Sales: used {latest:%B %Y}, the latest month in your file"
                      + (f"; {int(other.sum())} rows from other months were left out" if other.any() else "")
@@ -509,6 +818,8 @@ def canonical_tables(tables, extras=None):
     out["sales"] = sales
 
     targets = out.get("targets")
+    if targets is not None and "month" in targets.columns:
+        targets = _for_this_month(targets, latest, notes)
     if targets is None and (extras.get("store_target_units") or extras.get("store_target_value")):
         targets = pd.DataFrame({"target": [extras.get("store_target_units")],
                                 "target_value": [extras.get("store_target_value")]})
@@ -530,10 +841,9 @@ def canonical_tables(tables, extras=None):
     out["stock"] = stock
     if out.get("visitors") is not None:
         out["visitors"] = _in_month(out["visitors"], "Visitors", latest, notes)
+    if earlier:
+        _merge_with_saved(out, settings, earlier, summary, latest, notes)
 
-    for key in ("name", "delivery_weekday", "sale_days"):
-        if extras.get(key) not in (None, "", []):
-            settings[key] = extras[key]
     return {role: out.get(role) for role in ("sales", "targets", "stock", "visitors", "loyalty")}, \
         settings, notes
 
@@ -595,7 +905,10 @@ def to_files(canonical, settings):
     rows = [("Store name", settings.get("name", "")),
             ("Delivery day", WEEKDAY_NAMES[settings["delivery_weekday"]]
              if settings.get("delivery_weekday") is not None else ""),
-            ("Sale days", ", ".join(str(d) for d in settings.get("sale_days", [])))]
+            ("Sale days", ", ".join(str(d) for d in settings.get("sale_days", []))),
+            ("Sale day uplift", settings.get("sale_uplift") or ""),
+            ("Month-to-date file", "yes" if settings.get("summary_only") else ""),
+            (SAVED_COPY, "yes")]
     files.append(("settings.csv", pd.DataFrame(rows, columns=["Setting", "Value"])
                   .to_csv(index=False).encode("utf-8")))
     return files

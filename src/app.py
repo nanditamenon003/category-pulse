@@ -101,6 +101,8 @@ if signed_in and store is None and not st.session_state.get("welcomed"):
     views.welcome_guide()
 
 tour.render(current_page.title)
+if store is not None and not store.is_demo:
+    views.stale_data_note(store)
 current_page.run()
 
 # --- Floating chat button, whenever there's a store to ask about -------------------------

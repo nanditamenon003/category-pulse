@@ -194,6 +194,10 @@ def check_size_runs(category, day=None, hour=None, store=None):
     status = get_stock_status(category, day, hour, store=store)
     remaining = status["remaining_by_size"]
     core = status["core_sizes"]
+    if category in store.uncounted:  # not in the stock report: unknown, not sold out
+        return {"category": category, "as_of": {"day": day, "hour": hour}, "verdict": "not_counted",
+                "core_sizes": core, "core_remaining_by_size": {}, "other_sizes_remaining": {},
+                "total_remaining": None, "usual_stock_level": None, "total_as_pct_of_usual": None}
     usual = _usual_stock_level(store, category, day)
     total = status["total_remaining"]
     share_of_usual = total / usual if usual else None
@@ -234,7 +238,7 @@ def get_stock_health_report(day=None, hour=None, store=None):
     """Every category whose stock isn't healthy right now (for the alert banner)."""
     store, day, hour = resolve(store, day, hour)
     report = [check_size_runs(c, day, hour, store=store) for c in store.categories]
-    return [r for r in report if r["verdict"] != "healthy"]
+    return [r for r in report if r["verdict"] not in ("healthy", "not_counted")]
 
 
 def suggest_supply_action(category, day=None, hour=None, health=None, store=None):
@@ -246,7 +250,7 @@ def suggest_supply_action(category, day=None, hour=None, health=None, store=None
     store, day, hour = resolve(store, day, hour)
     if health is None:
         health = check_size_runs(category, day, hour, store=store)
-    if health["verdict"] == "healthy":
+    if health["verdict"] in ("healthy", "not_counted"):
         return None
 
     history = get_stock_history(category, day, hour, store=store)
@@ -324,7 +328,8 @@ def get_days_of_cover(category, day=None, hour=None, store=None):
     store, day, hour = resolve(store, day, hour)
     _validate(store, category, day, hour)
 
-    remaining = get_stock_status(category, day, hour, store=store)["remaining_by_size"]
+    remaining = ({} if category in store.uncounted
+                 else get_stock_status(category, day, hour, store=store)["remaining_by_size"])
     sales = store.sales
     window_days = list(range(max(1, day - 7), day))
     window = sales[(sales["category"] == category) & sales["day"].isin(window_days)]
@@ -429,6 +434,8 @@ def get_request_quantities(day=None, hour=None, store=None):
 
     categories = []
     for category in store.categories:
+        if category in store.uncounted:
+            continue
         on_hand = get_stock_status(category, day, hour, store=store)["remaining_by_size"]
         core = store.core_sizes[category]
         rates = {s: _in_stock_rate(store, category, s, through, sold_by.get(category, {}).get(s, {}))
@@ -494,7 +501,7 @@ def get_weeks_of_stock(category, day=None, hour=None, store=None):
     store, day, hour = resolve(store, day, hour)
     _validate(store, category, day, hour)
     through = day if hour >= store.hours[-1] else day - 1
-    if through < SLOW_WINDOW_DAYS:
+    if through < SLOW_WINDOW_DAYS or category in store.uncounted:
         return None
     rows = store.sales[(store.sales["category"] == category) & (store.sales["day"] <= through)]
     by_size = {}
@@ -532,6 +539,8 @@ def get_slow_stock(day=None, hour=None, store=None):
 
     slow, cover_by_category = [], {}
     for category in store.categories:
+        if category in store.uncounted:
+            continue
         on_hand = get_stock_status(category, day, hour, store=store)["remaining_by_size"]
         rate, not_selling = 0.0, []
         for size, units in on_hand.items():
@@ -541,6 +550,9 @@ def get_slow_stock(day=None, hour=None, store=None):
                 continue
             rate += sum(sold.get(d, 0) for d in days) / len(days)
             recent = [d for d in days if d > through - SLOW_WINDOW_DAYS]
+            # Month-to-date totals have no real days, so only "none sold this month" can be said.
+            if store.summary_only:
+                recent = days
             if (enough_history and units >= SLOW_MIN_UNITS and len(recent) >= SLOW_WINDOW_DAYS - 4
                     and not any(sold.get(d, 0) for d in recent)):
                 not_selling.append((size, int(units)))

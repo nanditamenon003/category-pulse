@@ -36,8 +36,9 @@ def _goal(store, day, judged):
     rest = sum(weights[d] for d in range(tomorrow, store.days_in_month + 1))
     sold = sum(p["units_sold_so_far"] for p in judged)
     target = sum(p["monthly_target"] for p in judged)
-    done = sum(weights[d] for d in range(1, day + 1))
-    needs = max(0.0, target - sold) * weights[tomorrow] / rest if rest else 0.0
+    done = sum(weights[d] for d in range(store.first_day, day + 1))
+    before_file = target * store.weight_before_first_day / sum(weights.values())
+    needs = max(0.0, target - sold - before_file) * weights[tomorrow] / rest if rest else 0.0
     usual = sold / done * weights[tomorrow] if done else 0.0
     return {"needs": round(needs), "usual_at_current_rate": round(usual), "target": target, "sold": sold,
             "yardstick": forecast.yardstick_of(store, [p["category"] for p in judged])}

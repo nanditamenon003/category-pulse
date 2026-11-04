@@ -86,7 +86,7 @@ def _eligible_partners(store, category, product_types, pace_by_category, health_
         if store.category_department[other] != department:
             continue
         pace = pace_by_category[other]
-        if pace["status"] not in ("on_pace", "ahead") or health_by_category[other] not in ("healthy", "unknown"):
+        if pace["status"] not in ("on_pace", "ahead") or health_by_category[other] not in ("healthy", "unknown", "not_counted"):
             continue
         candidates.append(pace)
     candidates.sort(key=lambda p: (

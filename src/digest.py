@@ -56,6 +56,8 @@ def _month_paragraph(store, day, hour, pace):
     left_out = len(pace) - len(judged)
     note = (f" ({left_out} {'category' if left_out == 1 else 'categories'} with nothing to judge by "
             f"{'is' if left_out == 1 else 'are'} left out.)" if left_out else "")
+    if store.first_day > 1:
+        note += f" These figures cover day {store.first_day} onward only."
     # What the month is measured against, in words: its target, or last year, or its own early pace.
     sources = {p.get("target_source") or "target" for p in judged}
     if sources == {"last year"}:
@@ -117,7 +119,7 @@ def _wins_paragraph(store, day, hour, pace):
     wins = []
     for p in ahead:
         win = f"{p['category']} ({p['pct_vs_pace']:+.0f}%)"
-        if store.has_stock:
+        if store.stock_known(p["category"]):
             cover = stock.get_days_of_cover(p["category"], day, hour, store=store)
             at_risk = [s["size"] for s in cover["sizes"] if s["likely_out_before_next_delivery"]]
             if at_risk:
@@ -169,8 +171,8 @@ def generate_digest(day=None, hour=None, store=None):
     drifting = [d["category"] for d in diagnoses if d["status"] == "drifting" and d["cause"] != "slow_seller"]
     slow_sellers = [d["category"] for d in diagnoses
                     if d["status"] == "drifting" and d["cause"] == "slow_seller"]  # behind ones: in the problems
-    weak_lines = [t for t in kpi.get_today_pace(day=day, hour=hour, store=store)
-                  if t["status"] == "behind"]
+    weak_lines = [] if store.summary_only else [
+        t for t in kpi.get_today_pace(day=day, hour=hour, store=store) if t["status"] == "behind"]
 
     paragraphs = [
         _month_paragraph(store, day, hour, pace),
@@ -228,7 +230,8 @@ def whatsapp_report(day=None, store=None):
         target = sum(p["monthly_target"] for p in judged)
         pct = (sold - expected) / expected * 100 if expected else 0
         standing = "right on pace" if abs(pct) < 3 else f"{abs(pct):.0f}% {'ahead of' if pct > 0 else 'behind'} pace"
-        lines.append(f"*Month:* {store.amount_of(sold)} of {a(target)}, {standing}")
+        label = "Month" if store.first_day == 1 else f"Days {store.first_day} to {day} only"
+        lines.append(f"*{label}:* {store.amount_of(sold)} of {a(target)}, {standing}")
         finish = forecast.get_month_end_range(day=day, hour=close, store=store)
         if finish["likely"] is not None and not finish["month_finished"]:
             chance = finish["chance_of_target_pct"]
@@ -239,11 +242,12 @@ def whatsapp_report(day=None, store=None):
         lines.append(f"*Month:* {store.amount_of(sum(p['units_sold_so_far'] for p in pace))} so far "
                      f"(no targets to judge by yet)")
 
-    today = kpi.get_today_pace(day=day, hour=close, store=store)
-    sold_today = store.sales.loc[store.sales["day"] == day, store.sold_column].sum()
-    expected_today = sum(t["expected_by_now"] for t in today if t["expected_by_now"] is not None)
-    lines.append(f"*Today:* {store.amount_of(sold_today)}"
-                 + (f" (expected about {a(expected_today)})" if expected_today else ""))
+    if not store.summary_only:  # month-to-date totals have no figure for a single day
+        today = kpi.get_today_pace(day=day, hour=close, store=store)
+        sold_today = store.sales.loc[store.sales["day"] == day, store.sold_column].sum()
+        expected_today = sum(t["expected_by_now"] for t in today if t["expected_by_now"] is not None)
+        lines.append(f"*Today:* {store.amount_of(sold_today)}"
+                     + (f" (expected about {a(expected_today)})" if expected_today else ""))
 
     diagnoses = diagnosis.diagnose_store(day, close, store=store)
     behind = sorted((d for d in diagnoses if d["status"] == "behind"), key=lambda d: d["pct_vs_pace"])
