@@ -34,7 +34,8 @@ def test_sample_round_trip():
     assert (s.month_name, s.today_day, s.hours, s.default_hour) == ("May", 24, d.hours, close)
     assert (s.categories, s.sizes, s.core_sizes) == (d.categories, d.sizes, d.core_sizes)
     assert (set(s.sale_days), s.delivery_weekday) == (set(d.sale_days), d.delivery_weekday)
-    assert all(on for _, on, _ in upload.feature_checklist(s))
+    # The sample file holds one month, so only the comparison with last month stays off.
+    assert [name for name, on, _ in upload.feature_checklist(s) if not on] == ["Comparison with last month"]
 
     ours, theirs = kpi.get_category_pace(store=s), kpi.get_category_pace(hour=close, store=d)
     for a, b in zip(ours, theirs):
@@ -109,7 +110,7 @@ def test_filled_template():
     causes = {d["category"]: d["cause"] for d in diagnosis.diagnose_store(store=s)}
     assert causes["Mens Trouser"] == "broken_size_run" and causes["Ladies Kurta"] == "stockout", causes
     off = [name for name, on, _ in upload.feature_checklist(s) if not on]
-    assert off == ["Loyalty tier targeting at the till"], off
+    assert off == ["Loyalty tier targeting at the till", "Comparison with last month"], off
     print("\nThe June test store, filled into the template (no Loyalty sheet):")
     print(f"  found the trousers' broken size run and the kurtas' stockout; only feature off: {off[0]}")
 

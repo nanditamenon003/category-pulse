@@ -137,6 +137,7 @@ TOOL_NEEDS = {
     "get_stock_status": ("stock",), "get_stock_history": ("stock",),
     "get_last_piece_alerts": ("stock",), "get_days_of_cover": ("stock",),
     "get_request_quantities": ("stock",), "get_slow_stock": ("stock",),
+    "get_last_month_comparison": ("last_month",),
     "get_footfall": ("footfall",), "get_conversion_metrics": ("footfall", "transactions"),
     "get_staffing_recommendation": ("visitor_hours",), "get_tier_playbook": ("loyalty",),
 }
@@ -166,6 +167,11 @@ def build_tools(store):
               "by now, % vs pace, status, units per day needed vs actual, and a labelled month-end "
               "projection. Start here to see what needs attention.",
               {"category": category(), "line": line, "hour": hour}),
+        _tool("get_last_month_comparison",
+              "This month against last month over the same dates, for a category, a line or the whole "
+              "store, and how last month finished. Compared by date, so say that weekends and sale days "
+              "may not line up.",
+              {"category": category(), "line": line}),
         _tool("get_today_pace",
               "Today's sales so far vs what a typical day would have sold by now, per line.",
               {"line": line, "hour": hour}),
@@ -274,6 +280,9 @@ def _build_tool_dispatch(current_hour, store):
     return {
         "get_category_diagnosis": lambda category:
             _diagnosis_for_agent(diagnosis.diagnose(category, day, now, store=s)),
+        "get_last_month_comparison": lambda category=None, line=None:
+            kpi.get_last_month(category=category, line=line, day=day, hour=now, store=s)
+            or {"note": "There's no last month that covers these dates to compare with."},
         "get_category_pace": lambda category=None, line=None, hour=None:
             kpi.get_category_pace(day, at(hour), category=category, line=line, store=s),
         "get_today_pace": lambda line=None, hour=None:

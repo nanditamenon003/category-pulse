@@ -63,6 +63,7 @@ def get_plan(day=None, store=None):
         "for_date": date.isoformat(),
         "weekday": WEEKDAY_NAMES[date.weekday()],
         "busy_day": store.is_busy(tomorrow),
+        "occasion": store.occasions.get(tomorrow),
         "measure": store.measure,
     }
 
@@ -144,7 +145,7 @@ def plan_message(plan, store):
     lines = [f"*Plan for {plan['weekday']} {date:%d %b}* ({store.name})"]
     goal = plan["goal"]
     if goal:
-        busy = " (a busy day)" if plan["busy_day"] else ""
+        busy = f" ({plan['occasion']})" if plan["occasion"] else " (a busy day)" if plan["busy_day"] else ""
         if goal["needs"] > 0:
             lines.append(f"Goal: {store.amount_of(goal['needs'])} {forecast.GOAL_PHRASE[goal['yardstick']]}{busy}. "
                          f"A usual {plan['weekday']} at our current rate brings about {a(goal['usual_at_current_rate'])}.")

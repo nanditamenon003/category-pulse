@@ -10,6 +10,7 @@ Every function takes a `store` (see store.py); leave it out for the demo
 store. `day` and `hour` default to the store's latest day and current hour.
 """
 
+import calendar
 import math
 
 from config import (
@@ -93,6 +94,46 @@ def classify_pace(expected, actual, scale=1.0):
     else:
         status = "on_pace"
     return status, pct, beyond_noise
+
+
+def get_last_month(category=None, line=None, day=None, hour=None, store=None):
+    """
+    This month against last month over the same dates, for a category, a line or the
+    whole store, in the store's measure. Complete days only, so a part-day doesn't look
+    like a drop. None when there's nothing fair to compare: no last month, or one that
+    covers too few of these dates.
+    """
+    store, day, hour = resolve(store, day, hour)
+    if not store.has_last_month:
+        return None
+    categories = ([category] if category else store.categories_in(line=line) if line else list(store.categories))
+    if not categories or any(c not in store.categories for c in categories):
+        raise ValueError(f"Unknown category or line: {category or line!r}")
+    then, column = store.last_month, store.sold_column
+    if then[column].sum() <= 0:
+        return None
+    through = day if hour >= store.hours[-1] else day - 1
+    last = min(through, int(then["day"].max()))
+    dates = range(store.first_day, last + 1)
+    covered = set(then["day"])
+    if not dates or sum(d in covered for d in dates) < 0.8 * len(dates):
+        return None
+    now_rows = store.sales[store.sales["category"].isin(categories) & store.sales["day"].isin(dates)]
+    then_rows = then[then["category"].isin(categories)]
+    sold_now = float(now_rows[column].sum())
+    sold_then = float(then_rows[then_rows["day"].isin(dates)][column].sum())
+    return {
+        "subject": category or line or "Whole store",
+        "month": calendar.month_name[store.last_month_start.month],
+        "from_day": store.first_day,
+        "to_day": last,
+        "measure": store.measure,
+        "sold_this_month": round(sold_now),
+        "sold_last_month": round(sold_then),
+        "pct_change": round((sold_now - sold_then) / sold_then * 100, 1) if sold_then else None,
+        "last_month_total": round(float(then_rows[column].sum())) if len(covered) >= 25 else None,
+        "note": "Compared by date, so weekends, sale days and festivals may not line up.",
+    }
 
 
 def get_category_pace(day=None, hour=None, category=None, line=None, store=None):

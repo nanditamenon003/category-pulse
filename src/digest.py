@@ -242,6 +242,11 @@ def whatsapp_report(day=None, store=None):
         lines.append(f"*Month:* {store.amount_of(sum(p['units_sold_so_far'] for p in pace))} so far "
                      f"(no targets to judge by yet)")
 
+    versus = kpi.get_last_month(day=day, hour=close, store=store)
+    if versus and versus["pct_change"] is not None:
+        change = versus["pct_change"]
+        lines.append(f"*Against {versus['month']}:* {a(versus['sold_this_month'])} vs {a(versus['sold_last_month'])} "
+                     f"by day {versus['to_day']} ({'level' if abs(change) < 1 else f'{change:+.0f}%'})")
     if not store.summary_only:  # month-to-date totals have no figure for a single day
         today = kpi.get_today_pace(day=day, hour=close, store=store)
         sold_today = store.sales.loc[store.sales["day"] == day, store.sold_column].sum()

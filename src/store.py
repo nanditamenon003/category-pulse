@@ -90,6 +90,11 @@ class Store:
     first_day: int = 1         # the first day the sales cover (later than 1: a part of the month)
     summary_only: bool = False  # sales came as month-to-date totals, so daily figures are estimates
     uncounted: frozenset = frozenset()  # categories the stock report doesn't mention: stock unknown
+    busy_periods: list = field(default_factory=list)  # saved festivals: name, start, end, uplift
+    occasions: dict = field(default_factory=dict)     # day -> the festival it falls in
+    pairings: dict = field(default_factory=dict)      # category -> {"with": [...], "instead": [...]}
+    last_month: object = None        # DataFrame of day, category, units_sold, value; or None
+    last_month_start: object = None  # the first of that month
 
     # --- Calendar ------------------------------------------------------------------
 
@@ -144,6 +149,11 @@ class Store:
             return any(s in GIVEN_SOURCES for s in self.target_source[measure].values())
         has_unit, has_value = given("units", self.targets), given("value", self.value_targets)
         return "value" if has_value and not has_unit and self.has_value else "units"
+
+    def with_pairings(self, pairings):
+        """This store with the manager's own pairings. The same data; different suggestions."""
+        mark = hashlib.sha256(repr(sorted(pairings.items())).encode()).hexdigest()[:8]
+        return dataclasses.replace(self, pairings=pairings, id=f"{self.id}~{mark}")
 
     def for_measure(self, measure):
         """This store, judged in `measure`. The same data; a different yardstick."""
@@ -231,6 +241,10 @@ class Store:
     @property
     def has_loyalty(self):
         return self.loyalty is not None
+
+    @property
+    def has_last_month(self):
+        return self.last_month is not None
 
     def require(self, what):
         """Raises MissingData unless the data includes `what` (a has_* name without 'has_')."""
@@ -343,6 +357,8 @@ def demo_store():
         stock=stock,
         footfall=read("footfall"),
         loyalty=read("loyalty_tiers"),
+        last_month=read("last_month"),
+        last_month_start=(date.fromisoformat(config.MONTH_START) - timedelta(days=1)).replace(day=1),
     )
 
 
@@ -690,6 +706,7 @@ def _close_spelling(name, known):
 
 def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name="Your store",
                 store_id=None, sale_days=(), delivery_weekday=None, target_level=None, sale_uplift=None,
+                busy_periods=(), pairings=None, last_month=None,
                 summary_only=False):
     """
     Builds a Store from any store's tables (columns listed above). Raises
@@ -1005,7 +1022,15 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
             core_sizes[category] = [s for s in sizes[category] if s in core]
 
     # --- Targets in units and rupees, from whatever was given ---------------------------------------
-    weights = _learn_day_weights(sales, month_start, days_in_month, today_day, set(sale_days), sale_uplift)
+    # Festivals saved as dates: only the days falling in this month count, each with its own uplift.
+    day_uplift, occasions = {}, {}
+    for period in busy_periods:
+        for d in range(1, days_in_month + 1):
+            if period["start"] <= (month_start + timedelta(days=d - 1)).isoformat() <= period["end"]:
+                occasions[d] = period["name"]
+                day_uplift[d] = period.get("uplift")
+    weights = _learn_day_weights(sales, month_start, days_in_month, today_day, set(sale_days) | set(occasions),
+                                 sale_uplift, day_uplift)
     group_of = category_line if target_level == "line" else category_department
 
     def numbers_of(column):
@@ -1131,6 +1156,25 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
             df["line"] = df["category"].map(category_line)
             df["department"] = df["category"].map(category_department)
 
+    # Last month, by day and category, so like can be compared with like.
+    prior, prior_start = None, None
+    if last_month is not None and len(last_month):
+        rows = last_month.copy()
+        rows["product"] = _text(rows["product"])
+        full = ((_text(rows["line"]) + " " + rows["product"]) if has_line and _has(rows, "line")
+                else rows["product"])
+        rows["category"] = _match_ids(full, rows["product"], lookup, product_lookup)
+        when = _parse_dates(rows["date"])
+        rows["day"] = when.dt.day
+        rows["units_sold"] = pd.to_numeric(_clean_number_text(rows["units"]), errors="coerce").fillna(0)
+        rows["value"] = (pd.to_numeric(_clean_number_text(rows["value"]), errors="coerce").fillna(0)
+                         if _has(rows, "value") else 0.0)
+        rows = rows.dropna(subset=["category", "day"])
+        if len(rows):
+            prior = rows.groupby(["day", "category"], as_index=False)[["units_sold", "value"]].sum()
+            prior["day"] = prior["day"].astype(int)
+            prior_start = when.min().date().replace(day=1)
+
     fingerprint = hashlib.sha256(
         (str(pd.util.hash_pandas_object(sales, index=False).sum())
          + repr(sorted((m, c, round(v or 0, 2)) for m in resolved for c, v in resolved[m].items()))
@@ -1159,7 +1203,12 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
         sizes=sizes,
         core_sizes=core_sizes,
         day_weights=weights,
-        sale_days=frozenset(sale_days),
+        sale_days=frozenset(sale_days) | frozenset(occasions),
+        busy_periods=list(busy_periods),
+        occasions=occasions,
+        pairings=pairings or {},
+        last_month=prior,
+        last_month_start=prior_start,
         delivery_weekday=delivery_weekday,
         sales=sales,
         transactions=transactions,
@@ -1173,17 +1222,19 @@ def build_store(targets, sales, stock=None, footfall=None, loyalty=None, *, name
     )
 
 
-def plan_weights(by_weekday, month_start, days_in_month, sale_days=(), uplift=None):
-    """Each day's share of the month's trading: its weekday's weight, raised on sale days."""
+def plan_weights(by_weekday, month_start, days_in_month, sale_days=(), uplift=None, day_uplift=None):
+    """Each day's share of the month's trading: its weekday's weight, raised on sale days
+    (by `uplift`, or by that day's own figure in `day_uplift`)."""
     uplift = uplift or config.SALE_DAY_MULTIPLIER
+    day_uplift = day_uplift or {}
     weights = {}
     for d in range(1, days_in_month + 1):
         weight = float(by_weekday[(month_start + timedelta(days=d - 1)).weekday()])
-        weights[d] = weight * uplift if d in sale_days else weight
+        weights[d] = weight * (day_uplift.get(d) or uplift) if d in sale_days else weight
     return weights
 
 
-def _learn_day_weights(sales, month_start, days_in_month, today_day, sale_days, uplift=None):
+def _learn_day_weights(sales, month_start, days_in_month, today_day, sale_days, uplift=None, day_uplift=None):
     """
     How busy each day of the month is relative to the others, used to phase a
     monthly target into a target for today. Learned from this month's own
@@ -1206,4 +1257,4 @@ def _learn_day_weights(sales, month_start, days_in_month, today_day, sale_days, 
                   if d in all_days.index and weekday[d] in by_weekday and by_weekday[weekday[d]] > 0]
         if ratios:
             uplift = max(1.0, sum(ratios) / len(ratios))
-    return plan_weights(weights, month_start, days_in_month, sale_days, uplift)
+    return plan_weights(weights, month_start, days_in_month, sale_days, uplift, day_uplift)

@@ -17,6 +17,7 @@ Everything is simulated from a fixed random seed, so every run is identical.
 
 import math
 import os
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -36,6 +37,7 @@ from config import (
     LAST_YEAR_UNITS,
     MIN_PAR_PER_SIZE,
     MISSED_DELIVERIES,
+    MONTH_START,
     MONTHLY_TARGETS,
     PAR_WEEKS_OF_COVER,
     PAR_WEEKS_OVERRIDE,
@@ -52,6 +54,7 @@ from config import (
     is_busy_day,
     month_calendar,
     size_system_for,
+    WEEKDAY_WEIGHTS,
 )
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
@@ -282,6 +285,27 @@ ALTERATION_PRODUCTS = {"Trousers", "Jeans", "Blazers", "Shirts", "Dresses"}
 KIDS_LINES = ("Boys", "Girls", "Little Boys", "Little Girls")
 
 
+def generate_last_month():
+    """
+    The month before, by day and category, for the "against last month" comparison. An
+    ordinary month with no supply problems, so a category in trouble now shows the drop.
+    It has its own seed, so the main month's numbers don't move.
+    """
+    rng = np.random.default_rng(RANDOM_SEED + 3)
+    last_day = date.fromisoformat(MONTH_START) - timedelta(days=1)
+    first_day = last_day.replace(day=1)
+    weekdays = [(first_day + timedelta(days=i)).weekday() for i in range(last_day.day)]
+    total_weight = sum(WEEKDAY_WEIGHTS[w] for w in weekdays)
+    rows = []
+    for category in CATEGORIES:
+        level = MONTHLY_TARGETS[category] * rng.uniform(0.88, 1.02)
+        for i, weekday in enumerate(weekdays):
+            units = int(rng.poisson(level * WEEKDAY_WEIGHTS[weekday] / total_weight))
+            rows.append({"day": i + 1, "category": category, "units_sold": units,
+                         "value": units * AVG_PRICE[category]})
+    return pd.DataFrame(rows)
+
+
 def _tier_adjustments(category):
     """How each tier's share and response shift for this kind of product."""
     line, product = CATEGORY_LINE[category], CATEGORY_PRODUCT[category]
@@ -407,11 +431,11 @@ def _print_unplanned_stockouts(stock_df):
         print(f"  {category} size {size}: first on day {row['min']}, {row['count']} hours at zero")
 
 
-DATA_FILES = ("sales", "stock", "footfall", "loyalty_tiers")
+DATA_FILES = ("sales", "stock", "footfall", "loyalty_tiers", "last_month")
 
 # Bump this whenever the Sample Store changes (names, scenarios, rules), so a
 # running deployment rebuilds its data files instead of reusing old ones.
-DATA_VERSION = "2: plain line and category names"
+DATA_VERSION = "3: a last month to compare with"
 VERSION_FILE = "version.txt"
 
 
@@ -433,6 +457,7 @@ def generate_all(data_dir=DATA_DIR):
         "stock": stock_df,
         "footfall": generate_footfall(),
         "loyalty_tiers": generate_loyalty_tiers(),
+        "last_month": generate_last_month(),
     }
     for name, df in frames.items():
         df.to_csv(os.path.join(data_dir, f"{name}.csv"), index=False)

@@ -67,28 +67,40 @@ def get_tier_playbook(category, store=None):
     }
 
 
-def _eligible_partners(store, category, product_types, pace_by_category, health_by_category):
+def suggestions_for(store, category, kind):
     """
-    Categories of the given product types that are selling well (on pace or
-    ahead) and have their core sizes in stock (or no stock data to say
-    otherwise). Adults can pair across lines on the same floor; kids stay
-    within their own line (different ages). Best first: same line, then
-    ahead of on pace, then by % vs pace.
+    The categories to suggest for this one: the manager's own list if they've set one,
+    or else the usual rule. `kind` is "with" (goes with it, as an outfit) or "instead"
+    (stands in when it's sold out). By the rule, adults can pair across lines on the same
+    floor; kids stay within their own line (different ages).
+    """
+    own = store.pairings.get(category, {}).get(kind)
+    if own is not None:
+        return [c for c in own if c in store.categories and c != category]
+    product_types = (COMPLEMENTS if kind == "with" else SUBSTITUTES).get(store.category_product[category], [])
+    line, department = store.category_line[category], store.category_department[category]
+    return [other for other in store.categories
+            if other != category and store.category_product[other] in product_types
+            and store.category_department[other] == department
+            and not (department == KIDS_DEPARTMENT and store.category_line[other] != line)]
+
+
+def _eligible_partners(store, category, kind, pace_by_category, health_by_category):
+    """
+    The suggestions for this category that are selling well (on pace or ahead) and have
+    their core sizes in stock (or no stock data to say otherwise). A manager's own list
+    keeps its order; otherwise best first: same line, then ahead of on pace, then by %
+    vs pace.
     """
     line = store.category_line[category]
-    department = store.category_department[category]
     candidates = []
-    for other in store.categories:
-        if other == category or store.category_product[other] not in product_types:
-            continue
-        if department == KIDS_DEPARTMENT and store.category_line[other] != line:
-            continue
-        if store.category_department[other] != department:
-            continue
+    for other in suggestions_for(store, category, kind):
         pace = pace_by_category[other]
         if pace["status"] not in ("on_pace", "ahead") or health_by_category[other] not in ("healthy", "unknown", "not_counted"):
             continue
         candidates.append(pace)
+    if store.pairings.get(category, {}).get(kind) is not None:
+        return candidates
     candidates.sort(key=lambda p: (
         store.category_line[p["category"]] != line,
         p["status"] != "ahead",
@@ -162,7 +174,6 @@ def get_cross_sell_ideas(day=None, hour=None, statuses=("behind",), store=None):
     for category, pace in pace_by_category.items():
         if pace["status"] not in statuses:
             continue
-        product = store.category_product[category]
         stock_verdict = verdict[category]
         idea = {
             "category": category,
@@ -173,8 +184,7 @@ def get_cross_sell_ideas(day=None, hour=None, statuses=("behind",), store=None):
         }
 
         if stock_verdict in ("stockout", "running_out"):
-            partners = _eligible_partners(store, category, SUBSTITUTES.get(product, []),
-                                          pace_by_category, verdict)
+            partners = _eligible_partners(store, category, "instead", pace_by_category, verdict)
             idea["type"] = "substitute"
             idea["supply_action"] = stock.suggest_supply_action(
                 category, day, hour, health=health[category], store=store)
@@ -198,8 +208,7 @@ def get_cross_sell_ideas(day=None, hour=None, statuses=("behind",), store=None):
                                    "getting stock back."])
 
         else:
-            partners = _eligible_partners(store, category, COMPLEMENTS.get(product, []),
-                                          pace_by_category, verdict)
+            partners = _eligible_partners(store, category, "with", pace_by_category, verdict)
             best, pitch = _tier_pitch(playbook(category))
             partner = partners[0]["category"] if partners else None
             idea.update(type="complement", partner=partner, lead_tier=best and best["tier"],

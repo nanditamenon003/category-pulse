@@ -354,7 +354,9 @@ def _base_store():
         return load_data()
     if st.session_state.get("member"):
         return st.session_state.get("my_store")
-    return load_data()
+    # A guest can try different pairings on the Sample Store, for this visit.
+    pairings = st.session_state.get("guest_pairings")
+    return load_data().with_pairings(pairings) if pairings else load_data()
 
 
 def current_store():
@@ -374,7 +376,8 @@ def current_store():
 
 # Saved choices that only make sense for one store, cleared when the store in use changes.
 _STORE_SPECIFIC_KEYS = ("hour", "cat_department", "sell_category", "chat_chip", "measure")
-_UPLOAD_KEYS = ("my_store", "upload_result", "upload_key", "upload_files", "saved_at", "save_note", "saved_files")
+_UPLOAD_KEYS = ("my_store", "upload_result", "upload_key", "upload_files", "saved_at", "save_note", "saved_files",
+                "store_prefs")
 
 
 def request_forget():
@@ -501,6 +504,7 @@ LOOKUPS = {
     "contribution": lambda s, hour: kpi.get_contribution(hour=hour, store=s),
     "playbook": lambda s, category: loyalty.get_tier_playbook(category, store=s),
     "cross_sell": lambda s, hour: {i["category"]: i for i in loyalty.get_cross_sell_ideas(hour=hour, store=s)},
+    "last_month": lambda s, hour, category: kpi.get_last_month(category, hour=hour, store=s),
     "risky_sizes": _risky_sizes,
     "zones": _zones,
     "staffing": _staffing,
@@ -573,6 +577,10 @@ def playbook_for(category):
 
 def cross_sell_at(hour):
     return _get("cross_sell", hour)
+
+
+def last_month_at(hour, category=None):
+    return _get("last_month", hour, category)
 
 
 def risky_sizes_at(hour):

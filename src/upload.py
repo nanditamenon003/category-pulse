@@ -112,6 +112,8 @@ def build(tables, extras=None, earlier=None):
         name=settings.get("name") or "Your store", store_id=f"upload-{fingerprint}",
         sale_days=settings.get("sale_days", ()), delivery_weekday=settings.get("delivery_weekday"),
         sale_uplift=settings.get("sale_uplift"), summary_only=bool(settings.get("summary_only")),
+        busy_periods=settings.get("busy_periods", ()), pairings=settings.get("pairings"),
+        last_month=canonical["last_month"],
     )
     store.warnings.extend(str(n) for n in notes if isinstance(n, smart_import.Important))
     return store, [n for n in notes if not isinstance(n, smart_import.Important)], files
@@ -158,6 +160,7 @@ def feature_checklist(store):
          "upload visitor counts" + ("" if store.has_transactions else ", with bill numbers in your sales")),
         ("Tomorrow's busy hours and floor split", store.has_visitor_hours, "upload visitors by hour"),
         ("Loyalty tier targeting at the till", store.has_loyalty, "upload loyalty tier figures"),
+        ("Comparison with last month", store.has_last_month, "include last month's sales in your file"),
     ]
     return [(name, on, "" if on else hint) for name, on, hint in features]
 

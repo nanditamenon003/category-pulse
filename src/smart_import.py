@@ -20,6 +20,7 @@ is dropped before the data is saved.
 import csv
 import hashlib
 import io
+import json
 import math
 import re
 from datetime import date, datetime
@@ -619,11 +620,32 @@ def _add_earlier_days(new, old):
     return pd.concat([keep, new], ignore_index=True), int(when[keep.index].nunique())
 
 
+def _month_before(when):
+    return when.replace(day=1) - pd.Timedelta(days=1)
+
+
+def _in_that_month(rows, when):
+    dates = _parse_dates(rows["date"])
+    return rows[(dates.dt.year == when.year) & (dates.dt.month == when.month)]
+
+
+def _daily_totals(rows):
+    """Sales rows -> units (and rupees) per day and category: all a comparison needs, and small to keep."""
+    keys = [c for c in ("product", "line") if c in rows.columns] + ["date"]
+    numbers = [c for c in ("units", "value") if c in rows.columns]
+    rows = rows[keys + numbers].dropna(subset=["product"]).copy()
+    rows["date"] = _parse_dates(rows["date"]).dt.strftime("%Y-%m-%d")
+    for column in numbers:
+        rows[column] = _numeric(rows[column]).fillna(0)
+    return rows.groupby([k for k in keys], as_index=False, dropna=False)[numbers].sum()
+
+
 def _merge_with_saved(out, settings, earlier, summary, latest, notes):
     """
     A file that adds to the person's saved month: a day's report joins the days already
     saved, and anything the new file doesn't include (targets, stock...) carries over.
-    A later month starts afresh; an older month is flagged, since it replaces newer data.
+    A later month starts afresh, with the saved month kept to compare with; an older
+    month is flagged, since it replaces newer data.
     """
     saved = _read_saved(earlier)
     old_settings = _settings(saved["settings"].where(saved["settings"].notna(), None)) if "settings" in saved else {}
@@ -639,13 +661,22 @@ def _merge_with_saved(out, settings, earlier, summary, latest, notes):
         notes.append(Important(f"This file is for {latest:%B %Y}, older than your saved {last_saved:%B %Y}. "
                                f"Showing it replaces the saved month."))
         return
+    saved_month = _in_that_month(saved["sales"], last_saved)
     if (last_saved.year, last_saved.month) < (latest.year, latest.month):
+        before = _month_before(latest)
+        if (last_saved.year, last_saved.month) == (before.year, before.month) and out.get("last_month") is None \
+                and not old_settings.get("summary_only"):
+            out["last_month"] = _daily_totals(saved_month)
         return
+    if out.get("last_month") is None:
+        rows = _in_that_month(saved["sales"], _month_before(latest))
+        if len(rows):
+            out["last_month"] = _daily_totals(rows)
     for key in ("sale_days", "sale_uplift"):
         if key in old_settings:
             settings.setdefault(key, old_settings[key])
     if not summary:
-        out["sales"], kept = _add_earlier_days(out["sales"], saved["sales"])
+        out["sales"], kept = _add_earlier_days(out["sales"], saved_month)
         if kept:
             notes.append(Important(f"Added to your saved {latest:%B}: {kept} earlier "
                                    f"day{'s' if kept != 1 else ''} kept, and this file's days taken from the "
@@ -688,7 +719,53 @@ def _settings(df):
         out["sale_uplift"] = float(uplift)
     if str(values.get("month-to-date file", "")).strip().lower() == "yes":
         out["summary_only"] = True
+    for key, word in (("busy_periods", "busy periods"), ("pairings", "pairings")):
+        raw = values.get(word)
+        if raw is not None and pd.notna(raw) and str(raw).strip():
+            try:
+                out[key] = json.loads(raw)
+            except ValueError:
+                pass  # a hand-edited Settings sheet: carry on without it
     return out
+
+
+def clean_busy_periods(rows):
+    """Rows typed on the page -> (saved periods, problems in plain words). Blank rows are ignored."""
+    periods, problems = [], []
+    for row in rows:
+        name = row.get("name")
+        name = "" if name is None or pd.isna(name) else str(name).strip()
+        start, end, uplift = row.get("start"), row.get("end"), row.get("uplift")
+        if not name and pd.isna(start) and pd.isna(end):
+            continue
+        label = name or "A busy period"
+        if pd.isna(start) or pd.isna(end):
+            problems.append(f"{label} needs both a start and an end date.")
+            continue
+        start, end = pd.Timestamp(start), pd.Timestamp(end)
+        if end < start:
+            problems.append(f"{label} ends before it starts.")
+            continue
+        if not pd.isna(uplift) and not 1 <= float(uplift) <= 5:
+            problems.append(f"{label}: how much busier should be between 1 and 5 times a normal day.")
+            continue
+        periods.append({"name": name or "Busy period", "start": start.date().isoformat(), "end": end.date().isoformat(),
+                        "uplift": None if pd.isna(uplift) else float(uplift)})
+    return sorted(periods, key=lambda p: p["start"]), problems
+
+
+def with_settings(files, **changes):
+    """Saved files with these settings changed (busy_periods, pairings), and everything else as it was."""
+    labels = {"busy_periods": "Busy periods", "pairings": "Pairings"}
+    table = _read_saved(files).get("settings")
+    if table is None:
+        table = pd.DataFrame(columns=["Setting", "Value"])
+    for key, value in changes.items():
+        table = table[table["Setting"] != labels[key]]
+        table = pd.concat([table, pd.DataFrame([{"Setting": labels[key], "Value": json.dumps(value)}])],
+                          ignore_index=True)
+    return [(name, data) for name, data in files if name != "settings.csv"] + [
+        ("settings.csv", table.to_csv(index=False).encode("utf-8"))]
 
 
 def weekday_number(text):
@@ -762,9 +839,10 @@ def canonical_tables(tables, extras=None, earlier=None):
     The chosen tables as build_store() takes them: {"sales", "targets", "stock", "visitors",
     "loyalty"} (missing ones None), the store's settings, and notes on what was done.
     `extras` are details typed on the upload page: name, delivery_weekday, sale_days,
-    sale_uplift, store_target_units, store_target_value (these override the file's Settings),
-    one_date_means ("mtd" or "day") and as_of. `earlier` is the person's saved month, which
-    a file for part of that month adds to.
+    sale_uplift, store_target_units, store_target_value, busy_periods, pairings (these override
+    the file's Settings), one_date_means ("mtd" or "day") and as_of. `earlier` is the person's
+    saved month, which a file for part of that month adds to. "last_month" comes back too: the
+    month before, by day, from the file or the saved month, if there is one.
     """
     extras = extras or {}
     notes, by_role, settings = [], {}, {}
@@ -784,6 +862,9 @@ def canonical_tables(tables, extras=None, earlier=None):
 
     for key in ("name", "delivery_weekday", "sale_days", "sale_uplift"):
         if extras.get(key) not in (None, "", []):
+            settings[key] = extras[key]
+    for key in ("busy_periods", "pairings"):  # saved preferences: an empty one means none
+        if key in extras:
             settings[key] = extras[key]
 
     # Targets that also hold what's sold so far: the classic target-vs-achieved sheet.
@@ -830,13 +911,20 @@ def canonical_tables(tables, extras=None, earlier=None):
     year_ago = (dates.dt.year == latest.year - 1) & (dates.dt.month == latest.month)
     last_year = sales[year_ago].copy()
     other = dates.notna() & ~same & ~year_ago
-    if same.sum() < 0.2 * other.sum():
+    before = _month_before(latest)
+    month_before = (dates.dt.year == before.year) & (dates.dt.month == before.month)
+    our_copy = any(t["role"] == "settings" and SAVED_COPY in t["df"].iloc[:, 0].astype(str).values for t in tables)
+    if same.sum() < 0.2 * other.sum() and not our_copy:
         notes.append(Important(f"Only {int(same.sum())} of your {int(dates.notna().sum())} sales rows are from "
                                f"{latest:%B %Y}, the latest month in the file, and only those are used. If that "
                                f"looks wrong, check the dates."))
-    if other.any() or year_ago.any():
+    if month_before.any():
+        out["last_month"] = _daily_totals(sales[month_before])
+    left_out = other & ~month_before
+    if (other.any() or year_ago.any()) and not our_copy:
         notes.append(f"Sales: used {latest:%B %Y}, the latest month in your file"
-                     + (f"; {int(other.sum())} rows from other months were left out" if other.any() else "")
+                     + (f", keeping {before:%B} to compare with" if month_before.any() else "")
+                     + (f"; {int(left_out.sum())} rows from other months were left out" if left_out.any() else "")
                      + ".")
     sales, dates = sales[same | dates.isna()].copy(), dates[same | dates.isna()]
     if "hour" not in sales.columns:
@@ -873,7 +961,7 @@ def canonical_tables(tables, extras=None, earlier=None):
     if earlier:
         _merge_with_saved(out, settings, earlier, summary, latest, notes)
 
-    return {role: out.get(role) for role in ("sales", "targets", "stock", "visitors", "loyalty")}, \
+    return {role: out.get(role) for role in ("sales", "targets", "stock", "visitors", "loyalty", "last_month")}, \
         settings, notes
 
 
@@ -925,8 +1013,12 @@ def to_files(canonical, settings):
     """
     files = []
     for role, df in canonical.items():
+        if role == "last_month":
+            continue  # kept in the sales file, as it would be in an upload (see below)
         if df is not None and not df.empty:
             out = df.copy()
+            if role == "sales" and canonical.get("last_month") is not None:
+                out = pd.concat([canonical["last_month"], out], ignore_index=True)
             if "date" in out.columns:
                 out["date"] = _parse_dates(out["date"]).dt.strftime("%Y-%m-%d").where(
                     _parse_dates(out["date"]).notna(), out["date"])
@@ -937,6 +1029,8 @@ def to_files(canonical, settings):
             ("Sale days", ", ".join(str(d) for d in settings.get("sale_days", []))),
             ("Sale day uplift", settings.get("sale_uplift") or ""),
             ("Month-to-date file", "yes" if settings.get("summary_only") else ""),
+            ("Busy periods", json.dumps(settings["busy_periods"]) if settings.get("busy_periods") else ""),
+            ("Pairings", json.dumps(settings["pairings"]) if settings.get("pairings") else ""),
             (SAVED_COPY, "yes")]
     files.append(("settings.csv", pd.DataFrame(rows, columns=["Setting", "Value"])
                   .to_csv(index=False).encode("utf-8")))

@@ -46,6 +46,7 @@ st.session_state["member"] = signed_in
 if signed_in and st.session_state.get("my_store") is None and not st.session_state.get("tried_saved"):
     st.session_state["tried_saved"] = True
     views.load_saved_store()
+views.apply_pending_settings()
 store = prepare_session()  # before any widget is drawn
 
 PAGES = {

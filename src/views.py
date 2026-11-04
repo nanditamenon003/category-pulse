@@ -18,6 +18,7 @@ import streamlit as st
 
 import account
 import agent
+import loyalty
 import smart_import
 import storage
 import tour
@@ -47,6 +48,7 @@ from ui import (
     contribution_at,
     inr,
     cross_sell_at,
+    last_month_at,
     current_hour,
     current_store,
     diagnoses_at,
@@ -300,6 +302,18 @@ def _needs_text(p):
     return f"needs {s.amount(p['needed_units_per_day'], per_day=True)}/day, selling {selling}/day"
 
 
+def _versus_last_month(versus):
+    """'Against April: 2,498 vs 2,310 over the same 24 days (8% up). April finished at 2,950.' or ''."""
+    if not versus or versus["pct_change"] is None:
+        return ""
+    a, change = current_store().amount, versus["pct_change"]
+    days = versus["to_day"] - versus["from_day"] + 1
+    trend = "about level" if abs(change) < 1 else f"{abs(change):.0f}% {'up' if change > 0 else 'down'}"
+    finish = f" {versus['month']} finished at {a(versus['last_month_total'])}." if versus["last_month_total"] else ""
+    return (f"Against {versus['month']}: {a(versus['sold_this_month'])} vs {a(versus['sold_last_month'])} over the "
+            f"same {days} {'date' if days == 1 else 'dates'} ({trend}).{finish} {versus['note']}")
+
+
 def _compact_row(tone, title, text):
     return (f'<div class="cp-row {tone}"><div style="flex:1;min-width:0">'
             f'<div class="cp-row-text"><b>{esc(title)}</b>: {esc(text)}</div></div>'
@@ -367,6 +381,10 @@ def today_page():
                   if lines_judged else
                   kpi_card("Today so far", a(sum(t["units_sold_today"] for t in lines_today)), ""))
                + "</div>")
+
+    versus = _versus_last_month(last_month_at(hour))
+    if versus:
+        html_block(f'<div class="cp-small" style="margin:8px 0 0">{esc(versus)}</div>')
 
     if s.today_day < s.days_in_month:
         with st.container(key="plan_link"):
@@ -486,6 +504,10 @@ def _why_tab(p, diag):
                    + progress_bar(p["units_sold_so_far"], p["monthly_target"], p["expected_units_by_now"]))
         if not p["month_finished"] and me.get("caution"):
             html_block(f'<div class="cp-small">{esc(me["caution"])}</div>')
+
+    versus = _versus_last_month(last_month_at(p["as_of"]["hour"], p["category"]))
+    if versus:
+        html_block(f'<div class="cp-small" style="margin:8px 0 0">{esc(versus)}</div>')
 
     if p["status"] in ("behind", "drifting"):
         html_block(heading("The evidence"))
@@ -1156,6 +1178,8 @@ def sell_page():
         if st.button(f"Open {category} details", key=f"sell_open_{slug(category)}", type="tertiary"):
             category_dialog(category)
 
+    _pairings_editor()
+
     html_block(heading("Which offer works for whom", "pick any category"))
     if not current_store().has_loyalty:
         _not_in_data("loyalty tier figures", "upload loyalty tier figures")
@@ -1175,6 +1199,38 @@ def sell_page():
                          "Say yes to an extra item": f"{top['cross_sell_response_rate_pct']:.0f} in 100",
                          "Offer at the till": top["offer_at_the_till"]})
         st.dataframe(pd.DataFrame(best), hide_index=True, width="stretch")
+
+
+def _pairings_editor():
+    """What's suggested with each category, and instead of it when it's sold out, as the manager sees fit."""
+    s = current_store()
+    with st.expander("Change what's suggested together", icon=":material/tune:"):
+        html_block('<div class="cp-small">You know what sells together in your store. A suggestion only appears '
+                   'when a category is behind, and only if the suggested category is selling well and in stock, '
+                   'so nobody is walked to an empty shelf.'
+                   + ("" if st.session_state.get("member") else " As a guest, your changes last for this visit.")
+                   + '</div>')
+        category = st.selectbox("Category", s.categories, key="pair_category")
+        others = [c for c in s.categories if c != category]
+        go_with = st.multiselect("Suggest with it, as an outfit", others, key=f"pair_with_{slug(category)}",
+                                 default=loyalty.suggestions_for(s, category, "with"))
+        instead = st.multiselect("When it's sold out, walk shoppers to", others, key=f"pair_instead_{slug(category)}",
+                                 default=loyalty.suggestions_for(s, category, "instead"))
+        with st.container(horizontal=True, gap="small"):
+            if st.button("Save", key="pair_save", type="primary"):
+                _save_pairings(s.pairings | {category: {"with": go_with, "instead": instead}})
+            if category in s.pairings and st.button("Back to the usual suggestions", key="pair_reset", type="tertiary"):
+                st.session_state.pop(f"pair_with_{slug(category)}", None)
+                st.session_state.pop(f"pair_instead_{slug(category)}", None)
+                _save_pairings({c: v for c, v in s.pairings.items() if c != category})
+
+
+def _save_pairings(pairings):
+    if st.session_state.get("member"):
+        st.session_state["pending_settings"] = {"pairings": pairings}
+    else:
+        st.session_state["guest_pairings"] = pairings
+    st.rerun()
 
 
 def plan_page():
@@ -1203,7 +1259,8 @@ def plan_page():
                               if goal["needs"] > 0 else "keep going",
                               tone="red" if goal["needs"] > 1.15 * goal["usual_at_current_rate"] else ""))
         cards.append(kpi_card(f"A usual {p['weekday']}", a(goal["usual_at_current_rate"]),
-                              "at this month's current rate" + (" (a busy day)" if p["busy_day"] else "")))
+                              "at this month's current rate" + (f" ({p['occasion']})" if p["occasion"] else
+                                                                " (a busy day)" if p["busy_day"] else "")))
     else:
         cards.append(kpi_card("Tomorrow needs", "-", "no targets to judge by yet"))
     if me["likely"] is not None:
@@ -1431,6 +1488,7 @@ def _upload_extras():
                        ("up_uplift", "sale_uplift"), ("up_covers", "one_date_means"), ("up_as_of", "as_of")):
         if st.session_state.get(key):
             extras[extra] = st.session_state[key]
+    extras.update(st.session_state.get("store_prefs") or {})  # festivals and pairings stay with the store
     return extras, problems
 
 
@@ -1625,6 +1683,7 @@ def _upload_preview(store, notes):
         st.session_state["tour_step"] = None
         result["built_on"] = _earlier_files(result)
         st.session_state["saved_files"] = result.get("keep", [])
+        st.session_state["store_prefs"] = {"pairings": store.pairings, "busy_periods": store.busy_periods}
         _save_to_account(store, result.get("keep", []), st.session_state["layouts"])
         st.switch_page(tour.PAGES["Today"])
 
@@ -1654,7 +1713,67 @@ def load_saved_store():
     st.session_state["my_store"] = result["store"]
     st.session_state["saved_files"] = saved["files"]
     st.session_state["upload_result"] = result
+    st.session_state["store_prefs"] = {"pairings": result["store"].pairings,
+                                       "busy_periods": result["store"].busy_periods}
     st.session_state["saved_at"] = saved["saved_at"]
+
+
+def apply_pending_settings():
+    """
+    Top of the run, before any widget is drawn (the rebuild resets some of them): a change
+    to festivals or pairings, saved with the store's files and worked through every page.
+    """
+    pending = st.session_state.pop("pending_settings", None)
+    if pending is None or not st.session_state.get("saved_files"):
+        return
+    files = smart_import.with_settings(st.session_state["saved_files"], **pending)
+    st.session_state["store_prefs"] = (st.session_state.get("store_prefs") or {}) | pending
+    layouts = st.session_state.get("layouts")
+    result = _reading(files, layouts)
+    result["built_on"] = None
+    _fill_details(result)
+    _build_upload(result)
+    if not result.get("ok"):
+        st.session_state["save_note"] = "That change couldn't be applied: " + " ".join(result["problems"])
+        return
+    st.session_state["my_store"] = result["store"]
+    st.session_state["upload_result"] = result
+    st.session_state["saved_files"] = result["keep"]
+    _save_to_account(result["store"], result["keep"], layouts)
+
+
+def _busy_periods_editor(mine):
+    """Festivals and busy stretches, by date: they stay saved from month to month."""
+    with st.expander("Festivals and busy periods", icon=":material/celebration:"):
+        html_block('<div class="cp-small">Add each one once, even if it runs across two months. The plan expects '
+                   'more on those days, so a busy stretch ahead doesn\'t make the month look behind. They stay '
+                   'saved when you upload a new month. Leave "How much busier" blank to work it out from your '
+                   'sales, or use a usual uplift.</div>')
+        rows = pd.DataFrame(mine.busy_periods, columns=["name", "start", "end", "uplift"])
+        for column in ("start", "end"):
+            rows[column] = pd.to_datetime(rows[column])
+        rows["uplift"] = pd.to_numeric(rows["uplift"])
+        edited = st.data_editor(
+            rows, num_rows="dynamic", hide_index=True, width="stretch", key=f"periods_{mine.id}",
+            column_config={
+                "name": st.column_config.TextColumn("Name", help="For example Diwali or End of season sale"),
+                "start": st.column_config.DateColumn("From", format="DD/MM/YYYY"),
+                "end": st.column_config.DateColumn("To", format="DD/MM/YYYY"),
+                "uplift": st.column_config.NumberColumn("How much busier (times)", min_value=1.0, max_value=5.0,
+                                                        step=0.5, format="%.1f"),
+            })
+        if mine.occasions:
+            names = list(dict.fromkeys(mine.occasions.values()))
+            html_block(f'<div class="cp-small">This month: {esc(", ".join(names))}, on '
+                       f'{len(mine.occasions)} day{"s" if len(mine.occasions) != 1 else ""}.</div>')
+        if st.button("Save busy periods", key="save_periods"):
+            periods, problems = smart_import.clean_busy_periods(edited.to_dict("records"))
+            if problems:
+                html_block('<div class="cp-alert"><ul>' + "".join(f"<li>{esc(p)}</li>" for p in problems)
+                           + "</ul></div>")
+            else:
+                st.session_state["pending_settings"] = {"busy_periods": periods}
+                st.rerun()
 
 
 def _save_to_account(store, files, layouts=None):
@@ -1722,6 +1841,7 @@ def your_data_page():
         if st.button("Delete my data", key="mine_forget", type="tertiary", icon=":material/delete:"):
             _delete_my_data()
             st.rerun()
+        _busy_periods_editor(mine)
     else:
         name = account.first_name()
         html_block(f'<div class="cp-panel"><p><b>Welcome{", " + esc(name) if name else ""}.</b> Upload '
@@ -1737,7 +1857,8 @@ def your_data_page():
                  'sold. Rupee values, sizes, times and bill numbers add more. You can add other files '
                  'too: a stock report, your targets (per category, per floor or for the store; in units '
                  'or ₹), visitor counts. Don\'t have targets? The app compares with last year or with '
-                 'each category\'s own recent pace.</div>')
+                 'each category\'s own recent pace. Include last month\'s sales and you\'ll also see how '
+                 'this month compares.</div>')
     if guest:
         st.download_button("See the file layout (Excel template)", data=upload.template_bytes(), mime=XLSX,
                            file_name="category-pulse-template.xlsx", icon=":material/download:",
