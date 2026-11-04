@@ -150,6 +150,39 @@ def diagnose(category, day=None, hour=None, store=None):
     }
 
 
+def get_changes(day=None, store=None):
+    """
+    What's different from the previous close, so a manager can see what's new at a glance:
+    categories that fell behind or are back on track, and (with stock counted on both days)
+    ones that have just sold out or lost their core sizes. None if there's no previous day
+    to compare with, or the sales are month-to-date totals, which have no real days.
+    """
+    store, day, _ = resolve(store, day)
+    if store.summary_only or day <= store.first_day:
+        return None
+    close = store.hours[-1]
+    now = kpi.get_category_pace(day, close, store=store)
+    before = {p["category"]: p["status"] for p in kpi.get_category_pace(day - 1, close, store=store)}
+    counted_both = store.has_stock_history and day - 1 in store.stock_hours_by_day and day in store.stock_hours_by_day
+    changes = []
+    for p in now:
+        category, what, bad = p["category"], [], False
+        if p["status"] == "behind" and before[category] != "behind":
+            what.append("fell behind")
+            bad = True
+        elif before[category] == "behind" and p["status"] in ("on_pace", "ahead"):
+            what.append("is back on track")
+        if counted_both and store.stock_known(category):
+            today = stock.check_size_runs(category, day, close, store=store)["verdict"]
+            yesterday = stock.check_size_runs(category, day - 1, close, store=store)["verdict"]
+            if today != yesterday and today in ("stockout", "broken_size_run"):
+                what.append("sold out" if today == "stockout" else "lost its core sizes")
+                bad = True
+        if what:
+            changes.append({"category": category, "text": f"{category} {' and '.join(what)}", "bad": bad})
+    return sorted(changes, key=lambda c: not c["bad"])
+
+
 def diagnose_store(day=None, hour=None, store=None):
     """Diagnosis for every category."""
     store, day, hour = resolve(store, day, hour)

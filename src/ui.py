@@ -505,6 +505,7 @@ LOOKUPS = {
     "playbook": lambda s, category: loyalty.get_tier_playbook(category, store=s),
     "cross_sell": lambda s, hour: {i["category"]: i for i in loyalty.get_cross_sell_ideas(hour=hour, store=s)},
     "last_month": lambda s, hour, category: kpi.get_last_month(category, hour=hour, store=s),
+    "changes": lambda s, _: diagnosis.get_changes(store=s),
     "risky_sizes": _risky_sizes,
     "zones": _zones,
     "staffing": _staffing,
@@ -577,6 +578,10 @@ def playbook_for(category):
 
 def cross_sell_at(hour):
     return _get("cross_sell", hour)
+
+
+def changes_since_yesterday():
+    return _get("changes", None, slow=True)
 
 
 def last_month_at(hour, category=None):

@@ -242,6 +242,9 @@ def whatsapp_report(day=None, store=None):
         lines.append(f"*Month:* {store.amount_of(sum(p['units_sold_so_far'] for p in pace))} so far "
                      f"(no targets to judge by yet)")
 
+    changes = diagnosis.get_changes(day, store=store)
+    if changes:
+        lines.append("*New today:* " + "; ".join(c["text"] for c in changes[:4]))
     versus = kpi.get_last_month(day=day, hour=close, store=store)
     if versus and versus["pct_change"] is not None:
         change = versus["pct_change"]

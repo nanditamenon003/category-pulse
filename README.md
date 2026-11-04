@@ -86,6 +86,7 @@ Managers rarely have a tidy spreadsheet in a template's format, so the **Your da
 - **Targets in whatever form they exist:** per category, per floor, per line or one number for the whole store, in units, rupees or both; typed on the upload page; or none. Floor and store targets are shared across categories by how each sold before the last week (so one slipping category still shows), and labelled as estimates. With no target, a category is judged against **last year's sales** for the month (read from the same file if it goes back a year) or, failing that, against **its own pace earlier in the month**. Every screen says which yardstick it's using.
 - **Festivals and busy periods:** saved by name and date on the Your data page, with how much busier they usually are. The plan expects more on those days, a festival across two months counts in each, and they stay saved when a new month is uploaded.
 - **Against last month:** include last month's rows in the file, or just upload the new month over the saved one, and Today, the category pop-up, the evening report and the AI chat compare the same dates. It's left out when last month doesn't cover those dates, rather than comparing unlike with unlike.
+- **New since yesterday:** Today and the evening report list what changed since the previous close: categories that fell behind or are back on track, and ones that have just sold out or lost their core sizes.
 - **Your own pairings:** the Sell page lets a manager change what's suggested with each category, and where to walk shoppers when it's sold out. The suggestion still only appears if that category is selling well and in stock.
 - **Units or rupees:** the switch at the top judges every category's pace in units or rupees. Rupees are shown as shops say them: ₹45,000, ₹2.45 L, ₹1.20 Cr.
 - Ordinary spreadsheet habits are fine: numbers like 1,200, times like 2 PM, names in different capitals, returns as negative units. Every problem in a file is listed at once, and anything a page can't show is explained ("Not in your data: stock counts..."), never guessed.
@@ -170,6 +171,7 @@ Each module can also be run on its own and prints its own checks, e.g. `python s
 - `test_storage.py`: saved data is scrambled at rest, visible only to its owner, and gone after delete.
 - `test_wrong_answers.py`: everyday files that used to give a confident wrong answer (today's report alone, a month-to-date summary, mismatched stock names, month-first dates, festival days, odd targets) and report layouts such as tab-separated files, "₹1,499.00" amounts and pivots.
 - `test_month_tools.py`: festivals by date, across months and kept for the next one; last month from the same file or the saved month, compared over the same dates and left out when that wouldn't be fair; a manager's pairings replace the usual rule, but something behind or sold out is never suggested.
+- `test_changes.py`: what's new since yesterday, on the Sample Store's real turning points; nothing is claimed on a store's first day or from month-to-date totals; and the legal pages say what the app really does.
 - `test_chat_flow.py`: with no AI or network, the chat's answer arrives as it's written, it uses the same diagnosis as the pop-up, and a stalled provider gets a plain message.
 
 ### Deploying (Streamlit Community Cloud, free)
@@ -226,7 +228,8 @@ category-pulse/
 
 - The Sample Store is simulated, and **no real store has used the app or tried a real till export yet**. All testing is on simulated stores and made-up reports.
 - Uploads work one month at a time (the latest month in the file). Column guesses cover common retail wording; anything unusual can be set with the dropdowns, once. Pivot-style reports and `.xls` files aren't read.
-- It's upload-only: someone has to upload the report each day. There's no automatic feed from the till system, no alerts that reach you outside the app, no team logins and no view across several stores.
+- It's upload-only: someone has to upload the report each day. There's no automatic feed from the till system, no team logins and no view across several stores. Alerts appear inside the app and in the evening report, and don't reach you any other way.
+- The privacy and terms pages in `legal/` are plain-language drafts that haven't been reviewed by a lawyer.
 - A month-to-date summary gives real month figures but no single-day detail. Festivals have to be added by hand: the app doesn't know the calendar. The comparison with last month goes by date, so weekends, sale days and festivals may not line up, and the screens say so.
 - Free hosting can put the app to sleep when nobody has visited for a while, so the first visitor may have to wake it.
 - Uploaded data is read as at the close of its latest day. Stock alerts are only as detailed as the stock counts supplied (a daily count gives "by today's close", not the hour).

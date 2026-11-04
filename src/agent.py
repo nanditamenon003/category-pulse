@@ -167,6 +167,9 @@ def build_tools(store):
               "by now, % vs pace, status, units per day needed vs actual, and a labelled month-end "
               "projection. Start here to see what needs attention.",
               {"category": category(), "line": line, "hour": hour}),
+        _tool("get_changes_since_yesterday",
+              "What's new since the previous day's close: categories that fell behind or are back on "
+              "track, and ones that have just sold out or lost their core sizes.", {}),
         _tool("get_last_month_comparison",
               "This month against last month over the same dates, for a category, a line or the whole "
               "store, and how last month finished. Compared by date, so say that weekends and sale days "
@@ -280,6 +283,8 @@ def _build_tool_dispatch(current_hour, store):
     return {
         "get_category_diagnosis": lambda category:
             _diagnosis_for_agent(diagnosis.diagnose(category, day, now, store=s)),
+        "get_changes_since_yesterday": lambda: diagnosis.get_changes(day, store=s)
+            or {"note": "There's no previous day to compare with, or nothing has changed."},
         "get_last_month_comparison": lambda category=None, line=None:
             kpi.get_last_month(category=category, line=line, day=day, hour=now, store=s)
             or {"note": "There's no last month that covers these dates to compare with."},

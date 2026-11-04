@@ -20,6 +20,8 @@ Without those settings (e.g. someone running a copy from GitHub), the
 welcome page offers only "Look around", with the Sample Store.
 """
 
+import pathlib
+
 import streamlit as st
 
 from ui import esc, html_block, logo_uri
@@ -95,6 +97,23 @@ _PREVIEW = """
     Behind: Women Tops (sold out), chinos (core sizes gone)<br>Tomorrow: 84 units keeps the month on course</div>
 </div>
 """
+
+
+LEGAL_DIR = pathlib.Path(__file__).resolve().parent.parent / "legal"
+
+
+def _legal_text(name):
+    return (LEGAL_DIR / f"{name}.md").read_text(encoding="utf-8")
+
+
+@st.dialog("Privacy", width="large")
+def privacy_dialog():
+    st.markdown(_legal_text("privacy"))
+
+
+@st.dialog("Terms", width="large")
+def terms_dialog():
+    st.markdown(_legal_text("terms"))
 
 
 def is_configured():
@@ -192,6 +211,11 @@ def welcome_page():
     html_block('<div class="cp-w-foot">Your data stays private: only the columns the app needs are kept, '
                'encrypted, visible only to your account, never shared or sold, and deletable any time. '
                'The AI chat only sees your figures after you say yes.</div>')
+    with st.container(horizontal=True, gap="small", key="welcome_legal"):
+        if st.button("Privacy", key="welcome_privacy", type="tertiary"):
+            privacy_dialog()
+        if st.button("Terms", key="welcome_terms", type="tertiary"):
+            terms_dialog()
 
 
 def account_menu():

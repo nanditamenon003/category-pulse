@@ -47,6 +47,7 @@ from ui import (
     clickable,
     contribution_at,
     inr,
+    changes_since_yesterday,
     cross_sell_at,
     last_month_at,
     current_hour,
@@ -390,6 +391,14 @@ def today_page():
         with st.container(key="plan_link"):
             st.page_link(tour.PAGES["Plan"], label=f"Plan for {WEEKDAY_NAMES[s.weekday(s.today_day + 1)]} is "
                          f"ready: what to focus on, stock to request, busy hours", icon=":material/checklist:")
+
+    changes = changes_since_yesterday() if hour == s.hours[-1] else None  # close against close
+    if changes:
+        html_block('<div class="cp-panel" style="margin-top:10px"><b>New since yesterday:</b> '
+                   + "; ".join(esc(c["text"]) for c in changes[:5])
+                   + (f"; and {len(changes) - 5} more" if len(changes) > 5 else "") + ".</div>")
+    elif changes == []:
+        html_block('<div class="cp-small" style="margin:10px 0 0">Nothing new since yesterday\'s close.</div>')
 
     html_block(heading("Needs action now", "tap a category for the full picture"))
     if not behind:
@@ -1900,6 +1909,14 @@ def your_data_page():
 
 # --- Guide page ------------------------------------------------------------------------------
 
+def _legal_buttons():
+    with st.container(horizontal=True, gap="small"):
+        if st.button("Privacy", key="guide_privacy", type="tertiary"):
+            account.privacy_dialog()
+        if st.button("Terms", key="guide_terms", type="tertiary"):
+            account.terms_dialog()
+
+
 GUIDE_STATUSES = [
     ("behind", "More than 15% under where it should be by now, by more than normal day-to-day "
                "ups and downs. Needs action."),
@@ -1987,6 +2004,7 @@ def guide_page():
                  'Under each answer, "How I got this" lists every lookup and the numbers it '
                  f'returned. Once you\'re signed in, you can ask up to {QUESTIONS_PER_DAY} questions a day.'
                  '</p></div>')
+    _legal_buttons()
 
 
 # --- Chat pop-up -----------------------------------------------------------------------------
