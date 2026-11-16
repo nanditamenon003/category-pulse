@@ -1,0 +1,38 @@
+# Streamlit's free hosting puts an app to sleep when nobody has visited for a while, and the
+# next visitor then has to wake it. This opens the app in a real browser every few hours, and
+# presses the wake-up button if it's asleep. GitHub pauses scheduled jobs after 60 days with no
+# commits, so it needs turning back on from the Actions tab after a long quiet spell.
+name: Keep the app awake
+
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  visit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install playwright==1.49.1
+      - run: playwright install --with-deps chromium
+      - name: Visit the app
+        shell: python
+        run: |
+          from playwright.sync_api import TimeoutError, sync_playwright
+
+          with sync_playwright() as p:
+              page = p.chromium.launch().new_page()
+              page.goto("https://category-pulse.streamlit.app/", wait_until="domcontentloaded", timeout=90_000)
+              try:
+                  page.get_by_role("button", name="get this app back up").click(timeout=20_000)
+                  print("It was asleep: pressed the wake-up button.")
+              except TimeoutError:
+                  print("It was already awake.")
+              page.wait_for_timeout(60_000)  # stay long enough for the app to finish starting
