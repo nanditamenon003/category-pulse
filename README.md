@@ -49,7 +49,7 @@ One idea failed its test and was left out: predicting the day (or the chance) ea
 
 | Page | What it's for |
 |---|---|
-| **Today** | Four headline numbers (with the month-end range as a bar), a link to tomorrow's plan, a "Month so far" chart, and what needs action now and why |
+| **Today** | One phone screen: three headline numbers, what's new since yesterday, what needs action now and why, and a link to tomorrow's plan. "More for today" opens stock alerts, categories to watch, the comparison with last month, the "Month so far" chart and today by line |
 | **Plan** | Tomorrow's plan for the morning huddle, ready to share on WhatsApp |
 | **Categories** | Every category as cards, a table or a chart, with filters. Tap any one for its detail |
 | **Stock** | Stock problems, what to request (downloadable), last pieces, slow stock, and sizes at risk of running out |

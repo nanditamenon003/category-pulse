@@ -222,33 +222,26 @@ def _start_here():
     # Hidden once dismissed, and while the tour runs (the tour card does its job).
     if st.session_state.get("hide_start_here") or st.session_state.get("tour_step") is not None:
         return
-    s = current_store()
-    html_block(
-        f'<div class="cp-small" style="margin:0 0 6px">This is a sample store on day {s.today_day} of '
-        f'{s.days_in_month}. Tap any category below to see why, or ask a question (bottom right).</div>'
-    )
-    with st.container(horizontal=True, gap="small", vertical_alignment="center"):
-        if st.button("Take the tour", key="start_tour", icon=":material/tour:"):
+    with st.container(horizontal=True, gap="small", vertical_alignment="center", key="start_here"):
+        if st.button("Take the 2-minute tour", key="start_tour", icon=":material/tour:", type="tertiary"):
             tour.start()
-        if st.button("Got it, hide this", key="hide_start_btn", type="tertiary"):
+        if st.button("Hide", key="hide_start_btn", type="tertiary"):
             st.session_state["hide_start_here"] = True
             st.rerun()
 
 
 def _problem_row(p, diag):
+    """One category that needs action, short enough that two or three fit on a phone's first screen:
+    the cause, the gap and the evidence. The pop-up has the rest (the bar, what it needs per day)."""
     s = current_store()
     tone = STATUS[p["status"]][1]
     evidence = diag["evidence"][1] if len(diag["evidence"]) > 1 and diag["cause"] in (
         "stockout", "broken_size_run") else diag["headline"]
     return (
         f'<div class="cp-row {tone}"><div style="flex:1;min-width:0">'
-        f'{pill(p["status"])}{cause_chip(diag["cause"])}'
-        f'<div class="cp-row-name">{esc(p["category"])}</div>'
-        f'{progress_bar(p["units_sold_so_far"], p["monthly_target"], p["expected_units_by_now"])}'
+        f'<div class="cp-row-name">{esc(p["category"])} {cause_chip(diag["cause"])}</div>'
         f'<div class="cp-small">{esc(s.amount(p["units_sold_so_far"]))} of {esc(s.amount(p["monthly_target"]))} '
-        f'{esc(_yardstick_note(p))}· '
-        f'{pace_words(p["pct_vs_pace"])} · '
-        f'{esc(_needs_text(p))}</div>'
+        f'{esc(_yardstick_note(p))}· {pace_words(p["pct_vs_pace"])}</div>'
         f'<div class="cp-row-text">{esc(evidence)}</div>'
         f'</div><div class="cp-chev">&rsaquo;</div></div>'
     )
@@ -330,8 +323,8 @@ def today_page():
         return
     hour = current_hour()
     s = current_store()
-    page_title("Today", (f"Month to date, up to day {s.today_day}." if s.summary_only else
-                         f"The store at {time_label(hour)} on day {s.today_day} of the month."))
+    page_title("Today", (f"Month to date, up to day {s.today_day} of {s.days_in_month}." if s.summary_only else
+                         f"Day {s.today_day} of {s.days_in_month}, at {time_label(hour)}."), compact=True)
     if s.is_demo:
         _start_here()
     else:
@@ -356,102 +349,107 @@ def today_page():
     today_expected = sum(t["expected_by_now"] for t in lines_judged)
     a = s.amount
 
+    # One screen on a phone: three short figures, what's new, what needs action and tomorrow's
+    # plan. Everything else is one tap away under "More for today".
     if not judged:
-        month_cards = (kpi_card("Month so far", a(sold_all), "no targets to judge by yet")
-                       + kpi_card("Month-end at this rate", "-", "needs targets or 12 days of sales"))
+        month_cards = (kpi_card("Month so far", a(sold_all), "no targets yet")
+                       + kpi_card("Month-end", "-", "needs targets"))
     elif pace[0]["month_finished"]:
-        month_cards = (kpi_card("Month so far", a(sold), f"of about {a(expected)} expected by now")
-                       + kpi_card("Month result", a(sold), f"of the {a(target)} target"))
+        month_cards = (kpi_card("Month result", a(sold), f"of {a(target)} target")
+                       + kpi_card("Expected", a(expected), "by month-end"))
     else:
-        path = month_path_at(hour)
-        me = path["range"]
+        me = month_path_at(hour)["range"]
+        month_cards = kpi_card("Month so far", a(sold), f"of about {a(expected)} due")
         if me["likely"] is None:
-            end_card = kpi_card("Month-end at this rate", a(projected), f"target {a(target)} (a projection)")
+            month_cards += kpi_card("Month-end", a(projected), f"target {a(target)}")
         else:
             chance = me["chance_of_target_pct"]
-            end_card = kpi_card(
-                "Month-end at this rate", a(me["likely"]),
-                f"likely {a(me['low'])} to {a(me['high'])}"
-                + (f" · {chance}% {CHANCE_PHRASE[me['yardstick']]}" if chance is not None else ""),
-                extra=range_bar(me, target))
-        month_cards = kpi_card("Month so far", a(sold), f"of about {a(expected)} expected by now") + end_card
-    html_block('<div class="cp-kpis">'
+            month_cards += kpi_card("Month-end", a(me["likely"]),
+                                    f"{chance}% {CHANCE_PHRASE[me['yardstick']]}"
+                                    if chance is not None else f"{a(me['low'])} to {a(me['high'])}")
+    html_block('<div class="cp-kpis cp-compact">'
                + month_cards
                + kpi_card("Need action", f"{len(behind)} behind", f"{len(drifting)} to watch",
                           tone="red" if behind else "")
-               + ("" if s.summary_only else  # month-to-date totals have no figure for a single day
-                  kpi_card("Today so far", a(today_sold), f"of about {a(today_expected)} by now")
-                  if lines_judged else
-                  kpi_card("Today so far", a(sum(t["units_sold_today"] for t in lines_today)), ""))
                + "</div>")
-
-    versus = _versus_last_month(last_month_at(hour))
-    if versus:
-        html_block(f'<div class="cp-small" style="margin:8px 0 0">{esc(versus)}</div>')
-
-    if s.today_day < s.days_in_month:
-        with st.container(key="plan_link"):
-            st.page_link(tour.PAGES["Plan"], label=f"Plan for {WEEKDAY_NAMES[s.weekday(s.today_day + 1)]} is "
-                         f"ready: what to focus on, stock to request, busy hours", icon=":material/checklist:")
 
     changes = changes_since_yesterday() if hour == s.hours[-1] else None  # close against close
     if changes:
-        html_block('<div class="cp-panel" style="margin-top:10px"><b>New since yesterday:</b> '
-                   + "; ".join(esc(c["text"]) for c in changes[:5])
-                   + (f"; and {len(changes) - 5} more" if len(changes) > 5 else "") + ".</div>")
-    elif changes == []:
-        html_block('<div class="cp-small" style="margin:10px 0 0">Nothing new since yesterday\'s close.</div>')
+        html_block('<div class="cp-small" style="margin:8px 0 0"><b>New since yesterday:</b> '
+                   + "; ".join(esc(c["text"]) for c in changes[:3])
+                   + (f"; and {len(changes) - 3} more" if len(changes) > 3 else "") + ".</div>")
 
-    html_block(heading("Needs action now", "tap a category for the full picture"))
+    html_block(heading("Needs action now", "tap for why"))
     if not behind:
         html_block('<div class="cp-panel"><p>Nothing is clearly behind right now.</p></div>')
-    for p in behind:
+    for p in behind[:3]:
         if clickable(f"today_{slug(p['category'])}", _problem_row(p, diags[p["category"]]),
                      f"Open {p['category']}"):
             category_dialog(p["category"])
+    if len(behind) > 3:
+        st.page_link(tour.PAGES["Categories"], label=f"{len(behind) - 3} more behind: see them all on Categories",
+                     icon=":material/grid_view:")
+
+    if s.today_day < s.days_in_month:
+        with st.container(key="plan_link"):
+            st.page_link(tour.PAGES["Plan"], label=f"Plan for {WEEKDAY_NAMES[s.weekday(s.today_day + 1)]}",
+                         icon=":material/checklist:")
 
     behind_names = {p["category"] for p in behind}
     stock_rows = [(r["category"], r["verdict"]) for r in stock_health_at(hour)
                   if r["category"] not in behind_names] if s.has_stock else []
     core_pieces = [a for a in last_pieces_at(hour) if a["is_core_size"]] if s.has_stock else []
-    if stock_rows or core_pieces:
-        html_block(heading("Stock alerts"))
-        for category, verdict in stock_rows:
-            if clickable(f"stock_{slug(category)}",
-                         _compact_row(STATUS[by_category[category]["status"]][1], category,
-                                      STOCK_VERDICT[verdict]), f"Open {category}"):
-                category_dialog(category)
-        for a in core_pieces:
-            text = f"last piece in {a['size']} (a core size), {_when_dropped(a)}"
-            if clickable(f"piece_{slug(a['category'])}_{slug(a['size'])}",
-                         _compact_row(STATUS[by_category[a["category"]]["status"]][1],
-                                      a["category"], text), f"Open {a['category']}"):
-                category_dialog(a["category"])
+    counts = [f"{len(stock_rows) + len(core_pieces)} stock alert{'s' if len(stock_rows) + len(core_pieces) != 1 else ''}"
+              if stock_rows or core_pieces else "", f"{len(drifting)} to watch" if drifting else ""]
+    more = ", ".join(c for c in counts if c)
+    with st.expander("More for today" + (f": {more}" if more else "")):
+        if not s.summary_only:
+            sold_today = a(today_sold if lines_judged else sum(t["units_sold_today"] for t in lines_today))
+            html_block(f'<div class="cp-small"><b>Today so far:</b> {sold_today}'
+                       + (f" of about {a(today_expected)} expected by now" if lines_judged else "") + ".</div>")
+        versus = _versus_last_month(last_month_at(hour))
+        if versus:
+            html_block(f'<div class="cp-small" style="margin:6px 0 0">{esc(versus)}</div>')
+        if changes == []:
+            html_block('<div class="cp-small" style="margin:6px 0 0">Nothing new since yesterday\'s close.</div>')
+        if stock_rows or core_pieces:
+            html_block(heading("Stock alerts"))
+            for category, verdict in stock_rows:
+                if clickable(f"stock_{slug(category)}",
+                             _compact_row(STATUS[by_category[category]["status"]][1], category,
+                                          STOCK_VERDICT[verdict]), f"Open {category}"):
+                    category_dialog(category)
+            for piece in core_pieces:
+                text = f"last piece in {piece['size']} (a core size), {_when_dropped(piece)}"
+                if clickable(f"piece_{slug(piece['category'])}_{slug(piece['size'])}",
+                             _compact_row(STATUS[by_category[piece["category"]]["status"]][1],
+                                          piece["category"], text), f"Open {piece['category']}"):
+                    category_dialog(piece["category"])
 
-    if drifting:
-        html_block(heading("Keep an eye on", "slipping, but could still be normal ups and downs"))
-        for p in drifting:
-            text = (f"{pace_words(p['pct_vs_pace'], p['status'])}: {s.amount(p['units_sold_so_far'])} sold, "
-                    f"about {s.amount(p['expected_units_by_now'])} expected by now")
-            if clickable(f"drift_{slug(p['category'])}", _compact_row("amber", p["category"], text),
-                         f"Open {p['category']}"):
-                category_dialog(p["category"])
+        if drifting:
+            html_block(heading("Keep an eye on", "slipping, but could still be normal ups and downs"))
+            for p in drifting:
+                text = (f"{pace_words(p['pct_vs_pace'], p['status'])}: {s.amount(p['units_sold_so_far'])} sold, "
+                        f"about {s.amount(p['expected_units_by_now'])} expected by now")
+                if clickable(f"drift_{slug(p['category'])}", _compact_row("amber", p["category"], text),
+                             f"Open {p['category']}"):
+                    category_dialog(p["category"])
 
-    # A chart by day needs real days: not a file for part of the month, or month-to-date totals.
-    path = month_path_at(hour) if judged and not pace[0]["month_finished"] else None
-    if path and not (path["partial"] or s.summary_only):
-        html_block(heading("The month so far", f"{s.measure_label} sold vs {PATH_LABEL[path['yardstick']].lower()}"))
-        html_block('<div class="cp-legend">'
-                   f'<span><i style="background:{ACCENT}"></i>Sold so far</span>'
-                   f'<span><i style="background:repeating-linear-gradient(90deg,#8A8A84 0 5px,transparent 5px 9px)">'
-                   f'</i>{PATH_LABEL[path["yardstick"]]}</span>'
-                   f'<span><i style="background:{ACCENT_LINE};height:9px"></i>Likely finish (a projection)</span>'
-                   '</div>')
-        st.altair_chart(month_chart(path, s), width="stretch")
+        # A chart by day needs real days: not a file for part of the month, or month-to-date totals.
+        path = month_path_at(hour) if judged and not pace[0]["month_finished"] else None
+        if path and not (path["partial"] or s.summary_only):
+            html_block(heading("The month so far", f"{s.measure_label} sold vs {PATH_LABEL[path['yardstick']].lower()}"))
+            html_block('<div class="cp-legend">'
+                       f'<span><i style="background:{ACCENT}"></i>Sold so far</span>'
+                       f'<span><i style="background:repeating-linear-gradient(90deg,#8A8A84 0 5px,transparent 5px 9px)">'
+                       f'</i>{PATH_LABEL[path["yardstick"]]}</span>'
+                       f'<span><i style="background:{ACCENT_LINE};height:9px"></i>Likely finish (a projection)</span>'
+                       '</div>')
+            st.altair_chart(month_chart(path, s), width="stretch")
 
-    if not s.summary_only:
-        html_block(heading("Today so far, by line", f"{s.measure_label} sold today / expected by now")
-                   + grid(line_card(t) for t in lines_today))
+        if not s.summary_only:
+            html_block(heading("Today so far, by line", f"{s.measure_label} sold today / expected by now")
+                       + grid(line_card(t) for t in lines_today))
 
 
 # --- Category detail pop-up -------------------------------------------------------------------

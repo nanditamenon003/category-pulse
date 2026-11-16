@@ -136,6 +136,8 @@ header[data-testid="stHeader"] {{ background: {GRADIENT} top / 100% 3px no-repea
               font-variant-numeric: tabular-nums; margin: 3px 0 1px; }}
 .cp-kpi-num.red {{ color: {RED}; }}
 .cp-kpi-sub {{ font-size: 13px; color: {MUTED}; }}
+.cp-compact {{ grid-template-columns: repeat(3, minmax(0, 1fr)); }}
+.cp-compact .cp-kpi-num {{ font-size: 28px; }}
 /* Month-end range: a band from low to high, a dot at the likely finish, a tick at the target. */
 .cp-range {{ position: relative; height: 8px; background: #EEEDE9; border-radius: 4px; margin: 10px 4px 5px; }}
 .cp-range-band {{ position: absolute; top: 0; bottom: 0; background: {ACCENT_LINE}; border-radius: 4px; }}
@@ -330,6 +332,20 @@ header[data-testid="stHeader"] {{ background: {GRADIENT} top / 100% 3px no-repea
   .cp-w-h {{ font-size: 23px; margin-top: 40px; }}
   .cp-w-bubble {{ margin-right: 0; width: 90%; }}
   .cp-kpi-num {{ font-size: 26px; }}
+  /* Today's headline: three figures side by side, small enough for a phone. */
+  .cp-compact {{ gap: 6px; }}
+  .cp-compact .cp-kpi {{ padding: 8px 9px; border-radius: 12px; }}
+  .cp-compact .cp-kpi-label {{ font-size: 10px; letter-spacing: 0.02em; }}
+  .cp-compact .cp-kpi-num {{ font-size: 19px; }}
+  .cp-compact .cp-kpi-sub {{ font-size: 11.5px; line-height: 1.3; }}
+  /* The frame: brand name and spacing trimmed, so the page starts higher. */
+  .cp-brand {{ font-size: 16px; }}
+  .cp-logo {{ height: 24px; }}
+  .cp-title {{ font-size: 24px; margin-top: 0; }}
+  .cp-intro {{ margin-bottom: 6px; }}
+  .cp-h {{ margin: 12px 0 6px; }}
+  /* Smaller buttons in the top bar, so the time and account buttons share one line. */
+  [data-testid="stPopover"] button, [data-testid="stButtonGroup"] button {{ min-height: 34px; padding: 2px 10px; }}
   .block-container {{ padding-top: 4rem; }}
   /* On phones the chat button shrinks to a round icon so it covers less content. */
   .st-key-chat_fab {{ right: 12px; bottom: 76px; }}
@@ -656,7 +672,11 @@ def pill(status):
     return f'<span class="cp-pill {tone}">{label}</span>'
 
 
-def page_title(title, intro=""):
+def page_title(title, intro="", compact=False):
+    """The page's name and what it shows. `compact` puts both on one line, to save space on a phone."""
+    if compact:
+        html_block(f'<div class="cp-title">{esc(title)} <span class="cp-intro">{esc(intro)}</span></div>')
+        return
     intro_html = f'<div class="cp-intro">{esc(intro)}</div>' if intro else ""
     html_block(f'<div class="cp-title">{esc(title)}</div>{intro_html}')
 

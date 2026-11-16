@@ -14,9 +14,9 @@ TOUR = [
     {
         "page": "Today",
         "title": "The store at a glance",
-        "text": ("This is the store today, at the time on the clock button above. The four "
-                 "numbers say how the month is going, where it will end if nothing changes (a "
-                 "projection), how many categories need action, and how today is going."),
+        "text": ("This is the store today, at the time on the clock button above. The three "
+                 "numbers say how the month is going, where it will likely end (a projection) and "
+                 "how many categories need action. More for today, at the bottom, has the rest."),
         "highlight": ".cp-kpis",
     },
     {

@@ -86,7 +86,9 @@ with st.container(horizontal=True, horizontal_alignment="distribute", vertical_a
             )
         if store is not None and store.hourly:
             hour = current_hour()
-            with st.popover(f"{today_label()}, {time_label(hour)}", icon=":material/schedule:"):
+            # Short, so the account button fits beside it on a phone.
+            moment = "close" if hour == store.hours[-1] else f"{hour + 1}:00"
+            with st.popover(f"{today_label()[:3]}, {moment}", icon=":material/schedule:"):
                 st.select_slider(
                     "Step through the day", options=store.hours, key="hour",
                     format_func=time_label,
