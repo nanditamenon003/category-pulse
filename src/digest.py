@@ -52,7 +52,12 @@ def _month_paragraph(store, day, hour, pace):
     sold = sum(p["units_sold_so_far"] for p in judged)
     expected = sum(p["expected_units_by_now"] for p in judged)
     target = sum(p["monthly_target"] for p in judged)
-    projected = sum(p["projected_month_end_if_current_rate_continues"] for p in judged)
+    import forecast  # here, not at the top: forecast's own imports would make a loop
+
+    likely = forecast.get_month_end_range(day=day, hour=hour, store=store,
+                                          categories=[p["category"] for p in judged])["likely"]
+    projected = likely if likely is not None else sum(
+        p["projected_month_end_if_current_rate_continues"] for p in judged)
     left_out = len(pace) - len(judged)
     note = (f" ({left_out} {'category' if left_out == 1 else 'categories'} with nothing to judge by "
             f"{'is' if left_out == 1 else 'are'} left out.)" if left_out else "")
@@ -203,6 +208,25 @@ SHORT_CAUSE = {
     "slow_seller": "slow seller, plenty in stock",
     "unclear": "no clear cause yet",
 }
+
+
+def store_summary(store):
+    """A few headline words for the list of a person's stores, at the close of the latest day."""
+    store = store.for_measure(store.default_measure)
+    day = store.today_day
+    pace = kpi.get_category_pace(day, store.hours[-1], store=store)
+    judged = [p for p in pace if p["monthly_target"]]
+    if judged:
+        sold = sum(p["units_sold_so_far"] for p in judged)
+        expected = sum(p["expected_units_by_now"] for p in judged)
+        pct = (sold - expected) / expected * 100 if expected else 0
+        standing = (f"{store.amount_of(sold)} of {store.amount(sum(p['monthly_target'] for p in judged))}, "
+                    + ("right on pace" if abs(pct) < 3 else f"{abs(pct):.0f}% {'ahead of' if pct > 0 else 'behind'} pace"))
+    else:
+        standing = f"{store.amount_of(sum(p['units_sold_so_far'] for p in pace))} sold, no targets yet"
+    return {"month": f"{store.month_name} {store.month_start.year}", "day": day, "standing": standing,
+            "behind": sum(p["status"] == "behind" for p in pace),
+            "watch": sum(p["status"] == "drifting" for p in pace)}
 
 
 def whatsapp_report(day=None, store=None):

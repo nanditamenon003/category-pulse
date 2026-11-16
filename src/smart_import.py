@@ -755,14 +755,15 @@ def clean_busy_periods(rows):
 
 
 def with_settings(files, **changes):
-    """Saved files with these settings changed (busy_periods, pairings), and everything else as it was."""
-    labels = {"busy_periods": "Busy periods", "pairings": "Pairings"}
+    """Saved files with these settings changed (name, busy_periods, pairings), and everything else as it was."""
+    labels = {"name": "Store name", "busy_periods": "Busy periods", "pairings": "Pairings"}
     table = _read_saved(files).get("settings")
     if table is None:
         table = pd.DataFrame(columns=["Setting", "Value"])
     for key, value in changes.items():
         table = table[table["Setting"] != labels[key]]
-        table = pd.concat([table, pd.DataFrame([{"Setting": labels[key], "Value": json.dumps(value)}])],
+        text = value if key == "name" else json.dumps(value)
+        table = pd.concat([table, pd.DataFrame([{"Setting": labels[key], "Value": text}])],
                           ignore_index=True)
     return [(name, data) for name, data in files if name != "settings.csv"] + [
         ("settings.csv", table.to_csv(index=False).encode("utf-8"))]

@@ -69,7 +69,7 @@ READ_ME = [
     ("", ""),
     ("Dates", "Any normal date format works; day first (24/05/2026) is read as the day."),
     ("Privacy", "Your data stays private: only the columns the app uses are kept, they're encrypted "
-                "before they're saved, visible only to your account, never shared or sold, and you "
+                "before they're saved, tied to your account, never shared or sold, and you "
                 "can delete them any time. The AI chat only sees your figures after you say yes."),
 ]
 

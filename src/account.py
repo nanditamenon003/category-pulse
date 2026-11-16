@@ -57,7 +57,7 @@ FEATURES = [
      "The evening report and the morning huddle plan as short messages. Copy and share, instead of "
      "building the evening spreadsheet."),
     ("private", "Your data stays yours",
-     "Only the columns the app needs are kept, encrypted, visible only to your account, and "
+     "Only the columns the app needs are kept, encrypted and tied to your account, and "
      "deletable any time."),
 ]
 
@@ -94,7 +94,7 @@ _PREVIEW = """
   </div>
   <div class="cp-w-bubble"><div class="cp-w-bubble-who">Evening report, shared on WhatsApp</div>
     <b>Sample Store: close of Sun 24 May</b><br>Month: 2,498 of 3,215, right on pace<br>
-    Behind: Women Tops (sold out), chinos (core sizes gone)<br>Tomorrow: 84 units keeps the month on course</div>
+    Behind: Women Tops (sold out), Men Casual Trousers (core sizes gone)<br>Tomorrow: 84 units keeps the month on course</div>
 </div>
 """
 
@@ -181,7 +181,7 @@ def welcome_page():
             html_block('<div class="cp-small">Sign-in isn\'t set up on this copy of the app, so you can '
                        'look around a sample store without an account.</div>')
         html_block('<div class="cp-w-facts">'
-                   '<span class="cp-w-fact"><b>Any</b> till export</span>'
+                   '<span class="cp-w-fact"><b>Excel</b> or CSV reports</span>'
                    '<span class="cp-w-fact">Units <b>or ₹</b></span>'
                    '<span class="cp-w-fact">Made for <b>phones</b></span>'
                    '<span class="cp-w-fact"><b>Free</b> to try</span></div>')
@@ -209,7 +209,7 @@ def welcome_page():
         st.button("Explore the sample store", key="welcome_guest_bottom", type="primary", on_click=_guest,
                   icon=":material/arrow_forward:")
     html_block('<div class="cp-w-foot">Your data stays private: only the columns the app needs are kept, '
-               'encrypted, visible only to your account, never shared or sold, and deletable any time. '
+               'encrypted, tied to your account, never shared or sold, and deletable any time. '
                'The AI chat only sees your figures after you say yes.</div>')
     with st.container(horizontal=True, gap="small", key="welcome_legal"):
         if st.button("Privacy", key="welcome_privacy", type="tertiary"):
@@ -225,6 +225,13 @@ def account_menu():
         with st.popover(first_name() or "Account", icon=":material/account_circle:"):
             if email:
                 html_block(f'<div class="cp-small">Signed in as {esc(email)}</div>')
+            stores = st.session_state.get("my_stores") or []
+            current = st.session_state.get("store_slot", "1")
+            for entry in stores if len(stores) > 1 else []:
+                if entry["slot"] != current:
+                    st.button(f"Switch to {entry['name']}", key=f"menu_store_{entry['slot']}",
+                              icon=":material/swap_horiz:", on_click=st.session_state.__setitem__,
+                              args=("pending_switch", entry["slot"]))
             if st.button("Log out", key="account_logout", icon=":material/logout:"):
                 # Forget this visit's uploaded data and choices, then end the sign-in.
                 st.session_state.clear()

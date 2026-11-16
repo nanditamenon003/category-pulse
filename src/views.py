@@ -7,6 +7,7 @@ category detail and the chat. Only one pop-up can be open at a time, so
 "Ask the AI about this category" closes the detail and opens the chat.
 """
 
+import dataclasses
 import hashlib
 import json
 import urllib.parse
@@ -18,6 +19,7 @@ import streamlit as st
 
 import account
 import agent
+import digest
 import loyalty
 import smart_import
 import storage
@@ -178,7 +180,7 @@ def _no_data(page, what, detail):
 def privacy_promise():
     """What happens to a person's data, in plain words. Only what the app actually does."""
     if storage.is_configured():
-        return ("Your data stays private. It's encrypted before it's saved, visible only to your "
+        return ("Your data stays private. It's encrypted before it's saved, tied to your "
                 "account, never shared or sold, and you can delete it any time. The AI chat only sees "
                 "your figures after you say yes.")
     return ("Your data stays private. It's used only while you're signed in on this visit, and it's "
@@ -429,7 +431,8 @@ def today_page():
     if drifting:
         html_block(heading("Keep an eye on", "slipping, but could still be normal ups and downs"))
         for p in drifting:
-            text = f"{pace_words(p['pct_vs_pace'])}, {_needs_text(p).split(',')[0]}"
+            text = (f"{pace_words(p['pct_vs_pace'], p['status'])}: {s.amount(p['units_sold_so_far'])} sold, "
+                    f"about {s.amount(p['expected_units_by_now'])} expected by now")
             if clickable(f"drift_{slug(p['category'])}", _compact_row("amber", p["category"], text),
                          f"Open {p['category']}"):
                 category_dialog(p["category"])
@@ -496,7 +499,7 @@ def _why_tab(p, diag):
         html_block('<div class="cp-kpis">'
                    + kpi_card("Sold this month", a(p["units_sold_so_far"]), f"of {a(p['monthly_target'])} {yardstick(p)}")
                    + kpi_card("Expected by now", a(p["expected_units_by_now"]),
-                              pace_words(p["pct_vs_pace"]))
+                              pace_words(p["pct_vs_pace"], p["status"]))
                    + kpi_card("Selling per day", a(p["actual_units_per_day"], per_day=True),
                               "the month is over" if p["month_finished"] else
                               f"needs {a(p['needed_units_per_day'], per_day=True)}/day "
@@ -1299,7 +1302,7 @@ def plan_page():
         markup = (f'<div class="cp-row {tone}"><div style="flex:1;min-width:0">{pill(f["status"])}'
                   + (cause_chip(f["cause"]) if f["status"] == "behind" or f["cause"] != "unclear" else "")
                   + f'<div class="cp-row-name">{esc(f["category"])} '
-                  f'<span class="cp-small">{pace_words(f["pct_vs_pace"])}</span></div>'
+                  f'<span class="cp-small">{pace_words(f["pct_vs_pace"], f["status"])}</span></div>'
                   f'<div class="cp-row-text"><b>Do:</b> {esc(f["action"])}</div>{till}'
                   f'</div><div class="cp-chev">&rsaquo;</div></div>')
         if clickable(f"plan_{slug(f['category'])}", markup, f"Open {f['category']}"):
@@ -1497,7 +1500,8 @@ def _upload_extras():
                        ("up_uplift", "sale_uplift"), ("up_covers", "one_date_means"), ("up_as_of", "as_of")):
         if st.session_state.get(key):
             extras[extra] = st.session_state[key]
-    extras.update(st.session_state.get("store_prefs") or {})  # festivals and pairings stay with the store
+    if not st.session_state.get("adding_store"):
+        extras.update(st.session_state.get("store_prefs") or {})  # festivals and pairings stay with the store
     return extras, problems
 
 
@@ -1505,6 +1509,8 @@ def _earlier_files(result):
     """The saved month this upload adds to. Once it's been shown, it stays with what it was built from."""
     if "built_on" in result:
         return result["built_on"]
+    if st.session_state.get("adding_store"):
+        return None  # a new store starts from its own file
     return st.session_state.get("saved_files") if st.session_state.get("up_add_to_saved", True) else None
 
 
@@ -1573,7 +1579,7 @@ def _what_it_covers(result):
         st.date_input("Your figures have no date. What date do they run up to?",
                       value=question["as_of"].date() if question["as_of"] is not None else None,
                       format="DD/MM/YYYY", key="up_as_of")
-    if st.session_state.get("saved_files") and "built_on" not in result:
+    if st.session_state.get("saved_files") and "built_on" not in result and not st.session_state.get("adding_store"):
         st.checkbox("Add this file to the month I've already saved", value=True, key="up_add_to_saved",
                     help="Days already saved are kept and this file's days are added, along with your "
                          "targets and stock if this file doesn't have them. Turn this off to start again "
@@ -1682,8 +1688,21 @@ def _upload_preview(store, notes):
         html_block('<div class="cp-small" style="margin:8px 0">Showing it also saves it to your account, '
                    'encrypted, so it\'s here next time you sign in. Only the columns in use are '
                    'saved.</div>')
+    slot = st.session_state.get("store_slot", "1")
+    if st.session_state.get("adding_store"):
+        slot = storage.new_slot(account.person_id())
+        if slot is None:
+            html_block(f'<div class="cp-alert amber">You already have {storage.MAX_STORES} stores saved. Remove '
+                       f'one on this page to add another.</div>')
+            return
+        if store.name == "Your store":  # no name in the file or typed in: give it one that's saved with it
+            store = dataclasses.replace(store, name=f"Store {slot}")
+            result = st.session_state["upload_result"]
+            result["keep"] = smart_import.with_settings(result.get("keep", []), name=store.name)
     if st.button("Show my store", key="show_upload", type="primary", icon=":material/arrow_forward:"):
         result = st.session_state["upload_result"]
+        st.session_state["store_slot"] = slot
+        st.session_state["adding_store"] = False
         layouts = dict(st.session_state.get("layouts") or {})
         for t in result["tables"]:
             layouts[smart_import.layout_key(t["columns"])] = {"role": t["role"], "mapping": t["mapping"]}
@@ -1697,14 +1716,15 @@ def _upload_preview(store, notes):
         st.switch_page(tour.PAGES["Today"])
 
 
-def load_saved_store():
-    """At the start of a visit: opens the person's saved data, if they have any."""
+def load_saved_store(slot=None):
+    """Opens one of the person's saved stores: at the start of a visit, the one used last."""
     person = account.person_id()
     if not (storage.is_configured() and person):
         return
     try:
         with st.spinner("Opening your saved data..."):
-            saved = storage.load(person)
+            st.session_state["my_stores"] = storage.stores(person)["stores"]
+            saved = storage.load(person, slot)
             if saved is None:
                 return
             result = _reading(saved["files"], saved["layouts"])
@@ -1725,13 +1745,29 @@ def load_saved_store():
     st.session_state["store_prefs"] = {"pairings": result["store"].pairings,
                                        "busy_periods": result["store"].busy_periods}
     st.session_state["saved_at"] = saved["saved_at"]
+    st.session_state["store_slot"] = saved["slot"]
+
+
+def _clear_upload():
+    """Forgets the upload in progress, so the page starts clean for another store."""
+    for key in ("upload_result", "upload_key", "upload_files", "adding_store"):
+        st.session_state.pop(key, None)
 
 
 def apply_pending_settings():
     """
-    Top of the run, before any widget is drawn (the rebuild resets some of them): a change
-    to festivals or pairings, saved with the store's files and worked through every page.
+    Top of the run, before any widget is drawn (the rebuild resets some of them): switching
+    to another saved store or starting a new one, or a change to festivals or pairings,
+    saved with the store's files and worked through every page.
     """
+    switch = st.session_state.pop("pending_switch", None)
+    if switch is not None:
+        _clear_upload()
+        if switch == "new":
+            st.session_state["adding_store"] = True
+        elif switch != "cancel":
+            load_saved_store(switch)
+        return
     pending = st.session_state.pop("pending_settings", None)
     if pending is None or not st.session_state.get("saved_files"):
         return
@@ -1793,8 +1829,10 @@ def _save_to_account(store, files, layouts=None):
     if not (storage.is_configured() and person and files):
         return
     try:
-        storage.save(person, files, store.name, layouts)
+        storage.save(person, files, store.name, layouts, slot=st.session_state.get("store_slot", "1"),
+                     summary=digest.store_summary(store))
         st.session_state["saved_at"] = pd.Timestamp.now(tz="UTC").isoformat()
+        st.session_state["my_stores"] = storage.stores(person)["stores"]
     except storage.StorageError as e:
         st.session_state["save_note"] = str(e)
 
@@ -1805,16 +1843,73 @@ def _feature_row(name, on, hint):
     return f'<div class="cp-term">{badge} {esc(name)}{extra}</div>'
 
 
-def _delete_my_data():
-    """Removes the person's data from this visit and, if saved, from their account."""
+def _delete_my_data(slot=None):
+    """Removes one saved store (`slot`), or all the person's data, from this visit and their account."""
     person = account.person_id()
     if storage.is_configured() and person:
         try:
-            storage.delete(person)
+            storage.delete(person, slot)
         except storage.StorageError as e:
             st.session_state["delete_note"] = str(e)
             return
-    request_forget()
+    left = [s for s in st.session_state.get("my_stores") or [] if s["slot"] != slot] if slot else []
+    if left:
+        st.session_state["pending_switch"] = left[0]["slot"]
+    else:
+        request_forget()
+
+
+def _store_line(entry):
+    """'May 2026, to day 24: 2,498 of 3,215, right on pace · 2 behind, 6 to watch' from a saved summary."""
+    s = entry.get("summary")
+    if not s:
+        return "Open it to see how it's doing."
+    watch = f", {s['watch']} to watch" if s["watch"] else ""
+    return f"{s['month']}, to day {s['day']}: {s['standing']} · {s['behind']} behind{watch}"
+
+
+def _stores_section(mine):
+    """The store on show, the others saved to the account, and adding or removing one."""
+    stores = st.session_state.get("my_stores") or []
+    current = st.session_state.get("store_slot", "1")
+    adding = st.session_state.get("adding_store")
+    can_save = storage.is_configured() and account.person_id()
+    html_block(heading("Your store" if len(stores) < 2 else f"Your stores ({len(stores)})")
+               + f'<div class="cp-panel"><p><b>{esc(mine.name)}</b>: {esc(mine.month_name)} '
+                 f'{mine.month_start.year}, up to day {mine.today_day}. Every page is showing it. '
+                 f'{esc(_saved_line())} To bring it up to date, upload its latest sales below.</p>'
+                 f'<p class="cp-small">{esc(privacy_promise())}</p></div>')
+    for entry in stores:
+        if entry["slot"] == current:
+            continue
+        with st.container(horizontal=True, vertical_alignment="center", gap="small"):
+            html_block(f'<div class="cp-row"><div style="flex:1;min-width:0"><div class="cp-row-name">'
+                       f'{esc(entry["name"])}</div><div class="cp-small">{esc(_store_line(entry))}</div></div></div>')
+            if st.button("Open", key=f"open_store_{entry['slot']}", icon=":material/swap_horiz:"):
+                st.session_state["pending_switch"] = entry["slot"]
+                st.rerun()
+    if adding:
+        html_block('<div class="cp-alert amber"><b>Adding another store.</b> Upload its sales below. '
+                   f'{esc(mine.name)} stays saved as it is, and its festivals and pairings aren\'t copied.</div>')
+    with st.container(horizontal=True, gap="small"):
+        if adding:
+            if st.button("Cancel adding a store", key="cancel_add_store", type="tertiary"):
+                st.session_state["pending_switch"] = "cancel"
+                st.rerun()
+        elif can_save and len(stores) < storage.MAX_STORES:
+            if st.button("Add another store", key="add_store", icon=":material/add_business:"):
+                st.session_state["pending_switch"] = "new"
+                st.rerun()
+        if len(stores) > 1 and st.button(f"Remove {mine.name}", key="remove_store", type="tertiary",
+                                         icon=":material/delete:"):
+            _delete_my_data(current)
+            st.rerun()
+        if st.button("Delete all my data" if len(stores) > 1 else "Delete my data", key="mine_forget",
+                     type="tertiary", icon=":material/delete_forever:"):
+            _delete_my_data()
+            st.rerun()
+    if st.session_state.get("delete_note"):
+        html_block(f'<div class="cp-small">{esc(st.session_state.pop("delete_note"))}</div>')
 
 
 def _step_heading(number, text, sub=""):
@@ -1839,18 +1934,9 @@ def your_data_page():
             st.button("Log in or create account", key="guest_signup", type="primary",
                       on_click=account.sign_in)
     elif mine is not None:
-        saved = _saved_line()
-        html_block(heading("Your store")
-                   + f'<div class="cp-panel"><p><b>{esc(mine.name)}</b>: {esc(mine.month_name)} '
-                     f'{mine.month_start.year}, up to day {mine.today_day}. Every page is showing it. '
-                     f'{esc(saved)} To replace it, upload new files below.</p>'
-                     f'<p class="cp-small">{esc(privacy_promise())}</p></div>')
-        if st.session_state.get("delete_note"):
-            html_block(f'<div class="cp-small">{esc(st.session_state.pop("delete_note"))}</div>')
-        if st.button("Delete my data", key="mine_forget", type="tertiary", icon=":material/delete:"):
-            _delete_my_data()
-            st.rerun()
-        _busy_periods_editor(mine)
+        _stores_section(mine)
+        if not st.session_state.get("adding_store"):
+            _busy_periods_editor(mine)
     else:
         name = account.first_name()
         html_block(f'<div class="cp-panel"><p><b>Welcome{", " + esc(name) if name else ""}.</b> Upload '

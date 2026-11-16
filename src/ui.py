@@ -26,6 +26,7 @@ import loyalty
 import plan
 import staffing
 import stock
+from config import PACE_THRESHOLD_PCT
 from store import demo_store
 
 # Palette from the spec. Green is one shade darker than the spec's #1E8E3E so
@@ -377,7 +378,7 @@ def current_store():
 # Saved choices that only make sense for one store, cleared when the store in use changes.
 _STORE_SPECIFIC_KEYS = ("hour", "cat_department", "sell_category", "chat_chip", "measure")
 _UPLOAD_KEYS = ("my_store", "upload_result", "upload_key", "upload_files", "saved_at", "save_note", "saved_files",
-                "store_prefs")
+                "store_prefs", "store_slot", "my_stores", "adding_store")
 
 
 def request_forget():
@@ -688,11 +689,18 @@ def yardstick(p):
     return YARDSTICK.get(p.get("target_source") or "target", "target")
 
 
-def pace_words(pct):
-    """How far ahead of or behind where it should be by now, in words: '21% behind', 'right on track'."""
+def pace_words(pct, status=None):
+    """
+    How far ahead of or behind where it should be by now, in words: '21% behind', 'right on
+    track'. Given the status, a gap past the 15% line that isn't called Behind or Ahead says
+    why, so '28% ahead' next to 'On track' doesn't look like a mistake.
+    """
     if abs(pct) < 1:
         return "right on track"
-    return f"{abs(pct):.0f}% {'behind' if pct < 0 else 'ahead'}"
+    words = f"{abs(pct):.0f}% {'behind' if pct < 0 else 'ahead'}"
+    if status in ("on_pace", "drifting") and abs(pct) > PACE_THRESHOLD_PCT:
+        words += " (few sales, could be chance)"
+    return words
 
 
 def category_card(p, show_line=True, cause=None):
@@ -702,7 +710,7 @@ def category_card(p, show_line=True, cause=None):
     if not p["monthly_target"]:
         detail, of = "nothing to judge by yet", ""
     else:
-        detail = pace_words(p["pct_vs_pace"])
+        detail = pace_words(p["pct_vs_pace"], p["status"])
         if p.get("target_source") not in (None, "target"):
             detail += f" · vs {SHORT_YARDSTICK.get(p['target_source'], 'target')}"
         of = f'<span class="cp-of"> / {esc(s.amount(p["monthly_target"]))}</span>'
